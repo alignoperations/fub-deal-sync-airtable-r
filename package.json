@@ -1,18 +1,19 @@
 {
   "name": "fub-deal-sync-airtable",
   "version": "1.0.0",
-  "description": "Sync FollowUpBoss deals with Airtable and Google Sheets",
+  "description": "FollowUpBoss deal sync with Airtable automation",
   "main": "app.js",
   "scripts": {
-    "start": "node app.js",
-    "dev": "node app.js"
+    "start": "node app.js"
   },
-  "keywords": ["followupboss", "airtable", "automation", "real-estate"],
   "dependencies": {
     "express": "^4.18.2",
     "axios": "^1.6.0",
     "google-spreadsheet": "^4.1.2",
     "google-auth-library": "^9.4.1",
     "dotenv": "^16.3.1"
+  },
+  "engines": {
+    "node": "18.x"
   }
 }
