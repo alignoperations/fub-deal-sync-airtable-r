@@ -445,6 +445,28 @@ class DealManagementAutomation {
                 console.log(`✅ Found record: ${record.id}`);
             } else {
                 console.log(`⚠️ No record found for ${fieldName} = "${searchValue}"`);
+                
+                // If we just created a record in this same request, try again after a short delay
+                if (tableName === 'Transactions Log' && fieldName === 'FUB Deal ID') {
+                    console.log('🔄 Retrying search after delay...');
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    
+                    const retryResponse = await axios.get(`${this.config.airtableBaseUrl}/${tableId}`, {
+                        headers: {
+                            'Authorization': `Bearer ${this.config.airtableToken}`
+                        },
+                        params: {
+                            filterByFormula: `{${fieldName}} = "${searchValue}"`,
+                            maxRecords: 1
+                        }
+                    });
+                    
+                    const retryRecord = retryResponse.data.records[0] || null;
+                    if (retryRecord) {
+                        console.log(`✅ Found record on retry: ${retryRecord.id}`);
+                        return retryRecord;
+                    }
+                }
             }
             
             return record;
