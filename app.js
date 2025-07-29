@@ -249,9 +249,12 @@ class DealManagementAutomation {
         }
         
         // Step 24: Update Record in Airtable (create or update transaction record)
-        await this.createOrUpdateAirtableRecord('Transactions Log', 'FUB Deal ID', dealData.id, {
+        const recordData = {
+            'FUB Deal ID': dealData.id.toString(), // Include the deal ID so other paths can find this record
             'ISA FUB Contact ID': agentRecord.fields['FUB Contact ID']
-        });
+        };
+        
+        await this.createOrUpdateAirtableRecord('Transactions Log', 'FUB Deal ID', dealData.id, recordData);
     }
 
     async executeAgentDifferentPath(dealData, contactData, spreadsheetData, usersList) {
