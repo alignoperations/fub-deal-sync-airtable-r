@@ -658,7 +658,7 @@ class DealManagementAutomation {
         });
     }
 
-    start(port = 3000) {
+    start(port = process.env.PORT || 3000) {
         this.app.listen(port, () => {
             console.log(`🚀 Deal Management Automation server running on port ${port}`);
             console.log(`📥 Webhook endpoint: http://localhost:${port}/webhook/deal-update`);
