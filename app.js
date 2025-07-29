@@ -83,9 +83,11 @@ class DealManagementAutomation {
             const pathsToExecute = this.determinePaths(spreadsheetData, dealData, usersList);
             console.log('🛤️ Paths to execute:', pathsToExecute);
             
-            // Execute each path
+            // Execute each path sequentially with small delay to avoid race conditions
             for (const path of pathsToExecute) {
                 await this.executePath(path, dealData, contactData, spreadsheetData, usersList, formattedUCDate);
+                // Small delay between paths to avoid Airtable rate limits and race conditions
+                await new Promise(resolve => setTimeout(resolve, 100));
             }
             
             res.json({ 
@@ -507,9 +509,20 @@ class DealManagementAutomation {
             'FUB Contact Tags'
         ];
         
+        // Fields that might be read-only or problematic - skip these for updates
+        const problematicFields = [
+            // Remove FUB Deal ID from here since we need it for creation
+        ];
+        
         for (const [key, value] of Object.entries(data)) {
             // Skip null values
             if (value === null || value === undefined) {
+                continue;
+            }
+            
+            // Skip problematic fields that might be read-only
+            if (problematicFields.includes(key)) {
+                console.log(`⚠️ Skipping problematic field: ${key}`);
                 continue;
             }
             
