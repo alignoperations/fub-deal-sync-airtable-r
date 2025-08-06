@@ -13,7 +13,6 @@ class DealManagementAutomation {
         this.setupRoutes();
     }
 
-    // Test route to debug Airtable record creation
     setupRoutes() {
         // Main webhook endpoint
         this.app.post('/webhook/deal-update', this.handleDealUpdate.bind(this));
@@ -30,7 +29,7 @@ class DealManagementAutomation {
         });
     }
 
-    async testAirtable(req, res) {
+    async getTableSchema(req, res) {
         try {
             const response = await axios.get(`${this.config.airtableBaseUrl}/${this.config.airtableTransactionsTable}`, {
                 headers: {
@@ -61,46 +60,66 @@ class DealManagementAutomation {
             });
         }
     }
+
+    async testAirtable(req, res) {
         try {
             console.log('🧪 Testing Airtable record creation...');
             
-            // Test 1: Minimal record
-            console.log('Test 1: Creating minimal record');
-            const minimal = await this.createAirtableRecord('Transactions Log', {
-                'Transaction Type': 'Test'
-            });
-            console.log('✅ Minimal record created:', minimal.id);
+            // Test 1: Minimal record (no primary field)
+            console.log('Test 1: Creating minimal record without FUB Deal ID');
+            try {
+                const minimal = await this.createAirtableRecord('Transactions Log', {
+                    'Transaction Type': 'Test'
+                });
+                console.log('✅ Minimal record created:', minimal.id);
+            } catch (error) {
+                console.log('❌ Minimal record failed:', error.response?.data || error.message);
+            }
             
-            // Test 2: Add FUB Deal ID
-            console.log('Test 2: Creating record with FUB Deal ID');
-            const withDealId = await this.createAirtableRecord('Transactions Log', {
-                'FUB Deal ID': 99999,
-                'Transaction Type': 'Test'
-            });
-            console.log('✅ Record with Deal ID created:', withDealId.id);
+            // Test 2: Try with FUB Deal ID as number
+            console.log('Test 2: Creating record with FUB Deal ID as number');
+            try {
+                const withDealIdNum = await this.createAirtableRecord('Transactions Log', {
+                    'FUB Deal ID': 99999,  // Send as number
+                    'Transaction Type': 'Test Number'
+                });
+                console.log('✅ Record with Deal ID (number) created:', withDealIdNum.id);
+            } catch (error) {
+                console.log('❌ Record with Deal ID (number) failed:', error.response?.data || error.message);
+            }
             
-            // Test 3: Try the exact same data that's failing
-            console.log('Test 3: Creating record with exact failing data');
-            const exactData = await this.createAirtableRecord('Transactions Log', {
-                'FUB Deal ID': '34399'
-            });
-            console.log('✅ Exact data record created:', exactData.id);
+            // Test 3: Try with FUB Deal ID as string
+            console.log('Test 3: Creating record with FUB Deal ID as string');
+            try {
+                const withDealIdStr = await this.createAirtableRecord('Transactions Log', {
+                    'FUB Deal ID': '99998',  // Send as string
+                    'Transaction Type': 'Test String'
+                });
+                console.log('✅ Record with Deal ID (string) created:', withDealIdStr.id);
+            } catch (error) {
+                console.log('❌ Record with Deal ID (string) failed:', error.response?.data || error.message);
+            }
+            
+            // Test 4: Try the exact failing data (as number)
+            console.log('Test 4: Creating record with exact failing data as number');
+            try {
+                const exactDataNum = await this.createAirtableRecord('Transactions Log', {
+                    'FUB Deal ID': 34399  // Send as number instead of string
+                });
+                console.log('✅ Exact data record (number) created:', exactDataNum.id);
+            } catch (error) {
+                console.log('❌ Exact data record (number) failed:', error.response?.data || error.message);
+            }
             
             res.json({ 
-                status: 'success',
-                tests: {
-                    minimal: minimal.id,
-                    withDealId: withDealId.id,
-                    exactData: exactData.id
-                }
+                status: 'Tests completed - check logs for results'
             });
             
         } catch (error) {
-            console.error('❌ Test failed:', error.message);
+            console.error('❌ Test setup failed:', error.message);
             res.status(500).json({ 
                 status: 'error', 
-                message: error.message,
-                response: error.response?.data
+                message: error.message
             });
         }
     }
@@ -232,42 +251,6 @@ class DealManagementAutomation {
         // Extract users from FollowUpBoss users array
         if (!usersArray || !Array.isArray(usersArray)) return [];
         return usersArray.map(user => user.name);
-    }
-
-    async lookupSpreadsheetRow(dealId) {
-        const doc = new GoogleSpreadsheet(this.config.googleSheetId, this.getGoogleAuth());
-        await doc.loadInfo();
-        
-        const sheet = doc.sheetsByTitle['Transactions Log'];
-        await sheet.loadCells();
-        
-        const rows = await sheet.getRows();
-        const dealRow = rows.find(row => row.get('FUB Deal ID') === dealId.toString());
-        
-        if (!dealRow) {
-            throw new Error(`Deal ${dealId} not found in spreadsheet`);
-        }
-        
-        return {
-            pipelineName: dealRow.get('Transaction Type'),
-            name: dealRow.get('Address / Client'),
-            clientFubLink: dealRow.get('Client FUB Link'),
-            description: dealRow.get('Deal Description'),
-            customOffMarketShareStatus: dealRow.get('Off-Market Share Status'),
-            customApptSetDate: dealRow.get('Appt Set Date'),
-            customApptScheduledForDate: dealRow.get('Appt Scheduled For Date'),
-            customApptHeldDate: dealRow.get('Appt Held Date'),
-            customISAApptHeldDate: dealRow.get('ISA Appt Held Date'),
-            customSignedDate: dealRow.get('Signed Date'),
-            customLiveDate: dealRow.get('Listing Live Date'),
-            customAttorneyReviewDate: dealRow.get('Attorney Review Date'),
-            customContractRatifiedDate: dealRow.get('Contract Ratified Date'),
-            projectedCloseDate: dealRow.get('Closing Date'),
-            price: dealRow.get('Sale Price'),
-            customISA: dealRow.get('ISA'),
-            usersName: dealRow.get('Primary Agent'),
-            usersId: dealRow.get('Primary Agent').includes('Eric Eckhardt') ? '12' : null
-        };
     }
 
     async formatUCDate(pipelineName, spreadsheetData) {
@@ -417,10 +400,12 @@ class DealManagementAutomation {
         
         // Step 34: If we have a shared record from previous path, update it. Otherwise create new.
         const recordData = {
-            'FUB Contact ID': contactData.id?.toString(), // From contact API
+            'FUB Deal ID': dealData.id, // Try to include this as a number
+            'FUB Contact ID': contactData.id, // From contact API
             'Address / Client': dealData.name, // From deal API
             'Stage': dealData.stageName, // From deal API
             'Transaction Type': dealData.pipelineName, // From deal API
+            'Primary Agent FUB Contact ID': agentRecord.fields['FUB Contact ID'],
             'Contact Created Date': contactData.created ? new Date(contactData.created).toISOString().split('T')[0] : null, // From contact API, not deal
             'Appt Set Date': dealData.customApptSetDate, // From deal API
             'Appt Scheduled For Date': dealData.customApptScheduledForDate, // From deal API
@@ -506,31 +491,6 @@ class DealManagementAutomation {
         };
     }
 
-    async createSpreadsheetRow(dealId) {
-        const doc = new GoogleSpreadsheet(this.config.googleSheetId, this.getGoogleAuth());
-        await doc.loadInfo();
-        
-        const sheet = doc.sheetsByTitle['Transactions Log'];
-        
-        // Create new row with basic deal ID
-        const newRow = await sheet.addRow({
-            'FUB Deal ID': dealId.toString()
-        });
-        
-        console.log(`✅ Created new spreadsheet row for deal: ${dealId}`);
-        
-        // Return minimal data structure
-        return {
-            pipelineName: null,
-            name: null,
-            customISA: null,
-            usersName: null,
-            usersId: null,
-            customContractRatifiedDate: null,
-            customApplicationAcceptedDate: null
-        };
-    }
-
     async findAirtableRecord(tableName, fieldName, searchValue) {
         try {
             // Debug: Check if Airtable token exists
@@ -612,6 +572,25 @@ class DealManagementAutomation {
             });
         } catch (error) {
             console.error(`❌ Debug listing failed: ${error.message}`);
+        }
+    }
+
+    async createOrUpdateAirtableRecord(tableName, primaryField, primaryValue, recordData) {
+        // First try to find existing record
+        const existingRecord = await this.findAirtableRecord(tableName, primaryField, primaryValue);
+        
+        if (existingRecord) {
+            // For updates, exclude the primary field to avoid conflicts
+            const updateData = { ...recordData };
+            delete updateData[primaryField]; // Remove the primary field from updates
+            console.log(`🔄 Updating existing record, excluding primary field: ${primaryField}`);
+            
+            // Update existing record
+            return await this.updateAirtableRecord(tableName, existingRecord.id, updateData);
+        } else {
+            // Create new record (include all fields)
+            console.log(`➕ Creating new record with all fields`);
+            return await this.createAirtableRecord(tableName, recordData);
         }
     }
 
@@ -736,25 +715,6 @@ class DealManagementAutomation {
         }
         
         return cleaned;
-    }
-
-    async createOrUpdateAirtableRecord(tableName, primaryField, primaryValue, recordData) {
-        // First try to find existing record
-        const existingRecord = await this.findAirtableRecord(tableName, primaryField, primaryValue);
-        
-        if (existingRecord) {
-            // For updates, exclude the primary field to avoid conflicts
-            const updateData = { ...recordData };
-            delete updateData[primaryField]; // Remove the primary field from updates
-            console.log(`🔄 Updating existing record, excluding primary field: ${primaryField}`);
-            
-            // Update existing record
-            return await this.updateAirtableRecord(tableName, existingRecord.id, updateData);
-        } else {
-            // Create new record (include all fields)
-            console.log(`➕ Creating new record with all fields`);
-            return await this.createAirtableRecord(tableName, recordData);
-        }
     }
 
     async createAirtableRecord(tableName, recordData) {
