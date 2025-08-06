@@ -51,7 +51,6 @@ class DealManagementAutomation {
         await this.createAsanaTask(dealData, { name: agentName });
         console.log('📝 Created Asana No-Contact task');
       }
-}
 
       // Build update payload
       const updateData = {};
