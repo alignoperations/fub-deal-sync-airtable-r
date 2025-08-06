@@ -345,7 +345,7 @@ class DealManagementAutomation {
         return { recordId: result.id, record: result };
     }
 
-    async executeAgentDifferentPath(dealData, contactData, spreadsheetData, usersList) {
+    async executeAgentDifferentPath(dealData, contactData, spreadsheetData, usersList, sharedRecord) {
         console.log('🎯 Executing Agent Different Path');
         
         // Step 26: Determine Co-Agent based on Assigned To logic
@@ -354,7 +354,7 @@ class DealManagementAutomation {
         if (coAgentResult.error) {
             // Log error and skip this path
             console.error(`⚠️ ${coAgentResult.error} - skipping agent different path`);
-            return;
+            return sharedRecord;
         }
         
         const coAgent = coAgentResult.coAgent;
@@ -384,8 +384,20 @@ class DealManagementAutomation {
                 console.log(`⚠️ Co-agent "${coAgent}" not found in Airtable - skipping Co-Agent FUB Contact ID field`);
             }
             
-            await this.createOrUpdateAirtableRecord('Transactions Log', 'FUB Deal ID', dealData.id, updateData);
+            // Clean the data
+            const cleanedData = this.cleanAirtableData(updateData);
+            
+            if (sharedRecord && sharedRecord.recordId) {
+                // Update existing record
+                await this.updateAirtableRecord('Transactions Log', sharedRecord.recordId, cleanedData);
+            } else {
+                // Create new record if no shared record
+                const result = await this.createAirtableRecord('Transactions Log', cleanedData);
+                sharedRecord = { recordId: result.id, record: result };
+            }
         }
+        
+        return sharedRecord;
     }
 
     async executeNoContactPath(dealData, contactData, spreadsheetData, formattedUCDate, sharedRecord) {
