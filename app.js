@@ -46,9 +46,11 @@ class DealManagementAutomation {
       }
       // If no contact, create Asana no-contact task
       if (!contactData.id) {
-        const agentName = dealData.people?.[0]?.name || 'Unknown';
+        // Use the first assigned user on the deal as agent name (fallback to people contact)
+        const agentName = dealData.users?.[0]?.name || dealData.people?.[0]?.name || 'Unknown';
         await this.createAsanaTask(dealData, { name: agentName });
         console.log('📝 Created Asana No-Contact task');
+      }
       }
 
       // Build update payload
