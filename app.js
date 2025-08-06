@@ -155,7 +155,73 @@ class DealManagementAutomation {
     await axios.post('https://slack.com/api/chat.postMessage', { channel, text }, { headers: { Authorization: `Bearer ${this.config.slack.botToken}`, 'Content-Type':'application/json' } });
   }
 
-  // FUB + Airtable helpers omitted for brevity (same as before)...
+  // FUB + Airtable helpers
+  async getDealData(dealId) {
+    const response = await axios.get(
+      `${this.config.followUpBossApi}/deals/${dealId}`,
+      { headers: { Authorization: `Basic ${Buffer.from(this.config.followUpBossToken + ':').toString('base64')}` } }
+    );
+    return response.data;
+  }
+
+  async getContactData(contactId) {
+    const response = await axios.get(
+      `${this.config.followUpBossApi}/people/${contactId}`,
+      { headers: { Authorization: `Basic ${Buffer.from(this.config.followUpBossToken + ':').toString('base64')}` } }
+    );
+    return response.data;
+  }
+
+  async getUserData(userId) {
+    const response = await axios.get(
+      `${this.config.followUpBossApi}/users/${userId}`,
+      { headers: { Authorization: `Basic ${Buffer.from(this.config.followUpBossToken + ':').toString('base64')}` } }
+    );
+    return response.data;
+  }
+
+  filterActiveDeals(dealData) {
+    return dealData.status === 'Active' && !dealData.status.includes('Deleted');
+  }
+
+  getFirstPeopleId(peopleArray) {
+    if (Array.isArray(peopleArray) && peopleArray.length > 0) {
+      return peopleArray[0].id;
+    }
+    return null;
+  }
+
+  async findAirtableRecord(tableName, fieldName, searchValue) {
+    const tableId = tableName === 'Agents' ? this.config.airtableAgentsTable : this.config.airtableTransactionsTable;
+    const resp = await axios.get(
+      `${this.config.airtableBaseUrl}/${tableId}`,
+      {
+        headers: { Authorization: `Bearer ${this.config.airtableToken}` },
+        params: { filterByFormula: `{${fieldName}} = "${searchValue}"`, maxRecords: 1 }
+      }
+    );
+    return resp.data.records[0] || null;
+  }
+
+  async createAirtableRecord(tableName, recordData) {
+    const tableId = tableName === 'Agents' ? this.config.airtableAgentsTable : this.config.airtableTransactionsTable;
+    const resp = await axios.post(
+      `${this.config.airtableBaseUrl}/${tableId}`,
+      { fields: recordData },
+      { headers: { Authorization: `Bearer ${this.config.airtableToken}`, 'Content-Type': 'application/json' } }
+    );
+    return resp.data;
+  }
+
+  async updateAirtableRecord(tableName, recordId, recordData) {
+    const tableId = tableName === 'Agents' ? this.config.airtableAgentsTable : this.config.airtableTransactionsTable;
+    const resp = await axios.patch(
+      `${this.config.airtableBaseUrl}/${tableId}/${recordId}`,
+      { fields: recordData },
+      { headers: { Authorization: `Bearer ${this.config.airtableToken}`, 'Content-Type': 'application/json' } }
+    );
+    return resp.data;
+  }
 }
 
 const config = {
