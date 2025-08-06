@@ -143,9 +143,13 @@ class DealManagementAutomation {
       .get(`${this.config.followUpBossApi}/people/${id}`, { headers: { Authorization: `Basic ${Buffer.from(this.config.followUpBossToken + ':').toString('base64')}` } })
       .then(r => r.data);
   }
-  getUserData(id) {
+    getUserData(id) {
+    const url = `${this.config.followUpBossApi}/users/${id}`;
+    console.log(`🔗 Calling FUB users endpoint: ${url}`);
     return axios
-      .get(`${this.config.followUpBossApi}/users/${id}`, { headers: { Authorization: `Basic ${Buffer.from(this.config.followUpBossToken + ':').toString('base64')}` } })
+      .get(url, {
+        headers: { Authorization: `Basic ${Buffer.from(this.config.followUpBossToken + ':').toString('base64')}` }
+      })
       .then(r => r.data);
   }
   filterActiveDeals(d) { return d.status === 'Active' && !d.status.includes('Deleted'); }
