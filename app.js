@@ -179,10 +179,14 @@ class DealManagementAutomation {
 
   findAirtableRecord(tableName, fieldName, value) {
     const tableId = tableName === 'Agents' ? this.config.airtableAgentsTable : this.config.airtableTransactionsTable;
+    // Case-insensitive match for email field
+    const filterFormula = fieldName === 'Company Email'
+      ? `LOWER({${fieldName}}) = "${value.toLowerCase()}"`
+      : `{${fieldName}} = "${value}"`;
     return axios
       .get(`${this.config.airtableBaseUrl}/${tableId}`, {
         headers: { Authorization: `Bearer ${this.config.airtableToken}` },
-        params: { filterByFormula: `{${fieldName}} = "${value}"`, maxRecords: 1 }
+        params: { filterByFormula, maxRecords: 1 }
       })
       .then(r => r.data.records[0] || null)
       .catch(() => null);
