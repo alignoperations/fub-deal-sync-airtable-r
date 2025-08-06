@@ -39,11 +39,8 @@ class DealManagementAutomation {
       const primaryContactId = this.getFirstPeopleId(dealData.people);
       let contactData = { id: null, assignedTo: null, tags: [] };
       if (primaryContactId) {
-        try {
-          contactData = await this.getContactData(primaryContactId);
-        } catch (err) {
-          console.log('⚠️ Contact lookup failed:', err.message);
-        }
+        try { contactData = await this.getContactData(primaryContactId); }
+        catch (err) { console.log('⚠️ Contact lookup failed:', err.message); }
       }
 
       // Determine primary vs co-agent IDs
@@ -51,34 +48,57 @@ class DealManagementAutomation {
       let primaryUserId, coUserId;
       if (userIds.length === 1) {
         primaryUserId = userIds[0];
-      } else {
-        primaryUserId = contactData.id;
+      } else if (contactData.assignedTo) {
+        primaryUserId = contactData.assignedTo;
         coUserId = userIds.find(id => id !== primaryUserId);
+      } else {
+        primaryUserId = userIds[0];
+        coUserId = userIds[1];
       }
 
-      // Build update payload for agents
-      const updateData = {};
-
-      // Primary agent
+      // Fetch agent emails from FUB
+      let primaryEmail = null, coEmail = null;
       if (primaryUserId) {
-        const primaryRec = await this.findAirtableRecord('Agents', 'FUB User ID', primaryUserId);
-        if (primaryRec) {
-          // Use Airtable record ID in array for linked-record field
-          updateData['Primary Agent FUB Contact ID'] = [primaryRec.id];
-          console.log(`✅ Primary Agent linked-record set to [${primaryRec.id}]`);
-        } else {
-          console.log(`⚠️ No Airtable record for primary user ID ${primaryUserId}`);
+        try {
+          const user = await this.getUserData(primaryUserId);
+          primaryEmail = user.email;
+          console.log(`ℹ️ Primary agent email: ${primaryEmail}`);
+        } catch (err) {
+          console.log('⚠️ Failed to fetch primary user email:', err.message);
+        }
+      }
+      if (coUserId) {
+        try {
+          const coUser = await this.getUserData(coUserId);
+          coEmail = coUser.email;
+          console.log(`ℹ️ Co-agent email: ${coEmail}`);
+        } catch (err) {
+          console.log('⚠️ Failed to fetch co-agent email:', err.message);
         }
       }
 
-      // Co-agent
-      if (coUserId) {
-        const coRec = await this.findAirtableRecord('Agents', 'FUB User ID', coUserId);
+      // Build update payload for agents using Company Email lookup
+      const updateData = {};
+
+      // Primary agent by email
+      if (primaryEmail) {
+        const primaryRec = await this.findAirtableRecord('Agents', 'Company Email', primaryEmail);
+        if (primaryRec) {
+          updateData['Primary Agent FUB Contact ID'] = [primaryRec.id];
+          console.log(`✅ Primary Agent linked-record set to [${primaryRec.id}]`);
+        } else {
+          console.log(`⚠️ No Airtable record for Company Email ${primaryEmail}`);
+        }
+      }
+
+      // Co-agent by email
+      if (coEmail) {
+        const coRec = await this.findAirtableRecord('Agents', 'Company Email', coEmail);
         if (coRec) {
           updateData['Co-Agent FUB Contact ID'] = [coRec.id];
           console.log(`✅ Co-Agent linked-record set to [${coRec.id}]`);
         } else {
-          console.log(`⚠️ No Airtable record for co-agent user ID ${coUserId}`);
+          console.log(`⚠️ No Airtable record for Company Email ${coEmail}`);
         }
         updateData['Primary Agent Deal %'] = 50;
         updateData['Co-Agent Deal %'] = 50;
@@ -88,11 +108,8 @@ class DealManagementAutomation {
 
       // Update agent fields
       if (Object.keys(updateData).length) {
-        try {
-          await this.updateAirtableRecord('Transactions Log', recordId, updateData);
-        } catch (err) {
-          console.error('❌ Airtable agent update failed:', err.response?.data || err.message);
-        }
+        try { await this.updateAirtableRecord('Transactions Log', recordId, updateData); }
+        catch (err) { console.error('❌ Airtable agent update failed:', err.response?.data || err.message); }
       }
 
       // ISA update (if provided)
@@ -100,13 +117,9 @@ class DealManagementAutomation {
         console.log('🎯 Running ISA update');
         const isaRec = await this.findAirtableRecord('Agents', 'Name', dealData.customISA);
         if (isaRec) {
-          // Linked-record array
-          try {
-            await this.updateAirtableRecord('Transactions Log', recordId, { 'ISA FUB Contact ID': [isaRec.id] });
-            console.log(`✅ ISA linked-record set to [${isaRec.id}]`);
-          } catch (err) {
-            console.error('❌ ISA update failed:', err.response?.data || err.message);
-          }
+          try { await this.updateAirtableRecord('Transactions Log', recordId, { 'ISA FUB Contact ID': [isaRec.id] }); }
+          catch (err) { console.error('❌ ISA update failed:', err.response?.data || err.message); }
+          console.log(`✅ ISA linked-record set to [${isaRec.id}]`);
         } else {
           console.log(`⚠️ ISA agent "${dealData.customISA}" not found`);
         }
@@ -122,84 +135,43 @@ class DealManagementAutomation {
   // Utility methods
   getDealData(id) {
     return axios
-      .get(`${this.config.followUpBossApi}/deals/${id}`, {
-        headers: {
-          Authorization: `Basic ${Buffer.from(this.config.followUpBossToken + ':').toString(
-            'base64'
-          )}`,
-        },
-      })
+      .get(`${this.config.followUpBossApi}/deals/${id}`, { headers: { Authorization: `Basic ${Buffer.from(this.config.followUpBossToken + ':').toString('base64')}` } })
       .then(r => r.data);
   }
-
   getContactData(id) {
     return axios
-      .get(`${this.config.followUpBossApi}/people/${id}`, {
-        headers: {
-          Authorization: `Basic ${Buffer.from(this.config.followUpBossToken + ':').toString(
-            'base64'
-          )}`,
-        },
-      })
+      .get(`${this.config.followUpBossApi}/people/${id}`, { headers: { Authorization: `Basic ${Buffer.from(this.config.followUpBossToken + ':').toString('base64')}` } })
       .then(r => r.data);
   }
-
-  filterActiveDeals(d) {
-    return d.status === 'Active' && !d.status.includes('Deleted');
+  getUserData(id) {
+    return axios
+      .get(`${this.config.followUpBossApi}/users/${id}`, { headers: { Authorization: `Basic ${Buffer.from(this.config.followUpBossToken + ':').toString('base64')}` } })
+      .then(r => r.data);
   }
-
-  getFirstPeopleId(p) {
-    return Array.isArray(p) && p.length ? p[0].id : null;
-  }
-
-  extractUsers(u) {
-    return Array.isArray(u) ? u.map(x => ({ id: x.id })) : [];
-  }
-
+  filterActiveDeals(d) { return d.status === 'Active' && !d.status.includes('Deleted'); }
+  getFirstPeopleId(p) { return Array.isArray(p) && p.length ? p[0].id : null; }
+  extractUsers(u) { return Array.isArray(u) ? u.map(x => ({ id: x.id })) : []; }
   findAirtableRecord(tableName, fieldName, value) {
     const tableId = tableName === 'Agents' ? this.config.airtableAgentsTable : this.config.airtableTransactionsTable;
     return axios
-      .get(`${this.config.airtableBaseUrl}/${tableId}`, {
-        headers: { Authorization: `Bearer ${this.config.airtableToken}` },
-        params: { filterByFormula: `{${fieldName}} = "${value}"`, maxRecords: 1 },
-      })
+      .get(`${this.config.airtableBaseUrl}/${tableId}`, { headers: { Authorization: `Bearer ${this.config.airtableToken}` }, params: { filterByFormula: `{${fieldName}} = "${value}"`, maxRecords: 1 } })
       .then(r => r.data.records[0] || null)
       .catch(() => null);
   }
-
   createAirtableRecord(tableName, data) {
     const tableId = tableName === 'Agents' ? this.config.airtableAgentsTable : this.config.airtableTransactionsTable;
     return axios
-      .post(
-        `${this.config.airtableBaseUrl}/${tableId}`,
-        { fields: this.cleanAirtableData(data) },
-        { headers: { Authorization: `Bearer ${this.config.airtableToken}`, 'Content-Type': 'application/json' } }
-      )
+      .post(`${this.config.airtableBaseUrl}/${tableId}`, { fields: this.cleanAirtableData(data) }, { headers: { Authorization: `Bearer ${this.config.airtableToken}`, 'Content-Type': 'application/json' } })
       .then(r => r.data);
   }
-
   updateAirtableRecord(tableName, recordId, data) {
     const tableId = tableName === 'Agents' ? this.config.airtableAgentsTable : this.config.airtableTransactionsTable;
     return axios
-      .patch(
-        `${this.config.airtableBaseUrl}/${tableId}/${recordId}`,
-        { fields: this.cleanAirtableData(data) },
-        { headers: { Authorization: `Bearer ${this.config.airtableToken}`, 'Content-Type': 'application/json' } }
-      )
+      .patch(`${this.config.airtableBaseUrl}/${tableId}/${recordId}`, { fields: this.cleanAirtableData(data) }, { headers: { Authorization: `Bearer ${this.config.airtableToken}`, 'Content-Type': 'application/json' } })
       .then(r => r.data);
   }
-
-  cleanAirtableData(obj) {
-    const cleaned = {};
-    Object.entries(obj).forEach(([k, v]) => {
-      if (v != null) cleaned[k] = v;
-    });
-    return cleaned;
-  }
-
-  start(port = process.env.PORT || 3000) {
-    this.app.listen(port, () => console.log(`🚀 Server on port ${port}`));
-  }
+  cleanAirtableData(obj) { const cleaned = {}; Object.entries(obj).forEach(([k, v]) => { if (v != null) cleaned[k] = v; }); return cleaned; }
+  start(port = process.env.PORT || 3000) { this.app.listen(port, () => console.log(`🚀 Server on port ${port}`)); }
 }
 
 const config = {
