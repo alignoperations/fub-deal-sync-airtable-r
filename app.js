@@ -43,7 +43,7 @@ class DealManagementAutomation {
         } catch (err) {
           console.log('⚠️ Contact lookup failed:', err.message);
         }
-      }
+
       // If no contact, create Asana no-contact task
       if (!contactData.id) {
         // Use the first assigned user on the deal as agent name (fallback to people contact)
