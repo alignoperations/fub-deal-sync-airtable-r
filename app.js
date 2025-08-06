@@ -43,15 +43,15 @@ class DealManagementAutomation {
         } catch (err) {
           console.log('⚠️ Contact lookup failed:', err.message);
         }
+      }
 
-      // If no contact, create Asana no-contact task
+      // If no contact or lookup failed, create Asana no-contact task
       if (!contactData.id) {
-        // Use the first assigned user on the deal as agent name (fallback to people contact)
-        const agentName = dealData.users?.[0]?.name || dealData.people?.[0]?.name || 'Unknown';
+        const agentName = dealData.users?.[0]?.name || 'Unknown';
         await this.createAsanaTask(dealData, { name: agentName });
         console.log('📝 Created Asana No-Contact task');
       }
-      }
+}
 
       // Build update payload
       const updateData = {};
