@@ -13,14 +13,96 @@ class DealManagementAutomation {
         this.setupRoutes();
     }
 
+    // Test route to debug Airtable record creation
     setupRoutes() {
         // Main webhook endpoint
         this.app.post('/webhook/deal-update', this.handleDealUpdate.bind(this));
+        
+        // Test endpoint for debugging Airtable
+        this.app.post('/test/airtable', this.testAirtable.bind(this));
+        
+        // Test route to get table schema
+        this.app.get('/test/schema', this.getTableSchema.bind(this));
         
         // Health check
         this.app.get('/health', (req, res) => {
             res.json({ status: 'healthy', timestamp: new Date().toISOString() });
         });
+    }
+
+    async testAirtable(req, res) {
+        try {
+            const response = await axios.get(`${this.config.airtableBaseUrl}/${this.config.airtableTransactionsTable}`, {
+                headers: {
+                    'Authorization': `Bearer ${this.config.airtableToken}`
+                },
+                params: {
+                    maxRecords: 1
+                }
+            });
+            
+            if (response.data.records.length > 0) {
+                const sampleRecord = response.data.records[0];
+                res.json({
+                    status: 'success',
+                    availableFields: Object.keys(sampleRecord.fields),
+                    sampleRecord: sampleRecord
+                });
+            } else {
+                res.json({
+                    status: 'success',
+                    message: 'No records found to analyze schema'
+                });
+            }
+        } catch (error) {
+            res.status(500).json({
+                status: 'error',
+                message: error.message
+            });
+        }
+    }
+        try {
+            console.log('🧪 Testing Airtable record creation...');
+            
+            // Test 1: Minimal record
+            console.log('Test 1: Creating minimal record');
+            const minimal = await this.createAirtableRecord('Transactions Log', {
+                'Transaction Type': 'Test'
+            });
+            console.log('✅ Minimal record created:', minimal.id);
+            
+            // Test 2: Add FUB Deal ID
+            console.log('Test 2: Creating record with FUB Deal ID');
+            const withDealId = await this.createAirtableRecord('Transactions Log', {
+                'FUB Deal ID': 99999,
+                'Transaction Type': 'Test'
+            });
+            console.log('✅ Record with Deal ID created:', withDealId.id);
+            
+            // Test 3: Try the exact same data that's failing
+            console.log('Test 3: Creating record with exact failing data');
+            const exactData = await this.createAirtableRecord('Transactions Log', {
+                'FUB Deal ID': '34399'
+            });
+            console.log('✅ Exact data record created:', exactData.id);
+            
+            res.json({ 
+                status: 'success',
+                tests: {
+                    minimal: minimal.id,
+                    withDealId: withDealId.id,
+                    exactData: exactData.id
+                }
+            });
+            
+        } catch (error) {
+            console.error('❌ Test failed:', error.message);
+            res.status(500).json({ 
+                status: 'error', 
+                message: error.message,
+                response: error.response?.data
+            });
+        }
     }
 
     async handleDealUpdate(req, res) {
@@ -83,9 +165,15 @@ class DealManagementAutomation {
             const pathsToExecute = this.determinePaths(spreadsheetData, dealData, usersList);
             console.log('🛤️ Paths to execute:', pathsToExecute);
             
-            // Execute each path sequentially with small delay to avoid race conditions
+            // Shared variable to track the created record
+            let sharedRecord = null;
+            
+            // Execute each path sequentially with shared record tracking
             for (const path of pathsToExecute) {
-                await this.executePath(path, dealData, contactData, spreadsheetData, usersList, formattedUCDate);
+                const result = await this.executePath(path, dealData, contactData, spreadsheetData, usersList, formattedUCDate, sharedRecord);
+                if (result && result.recordId) {
+                    sharedRecord = result;
+                }
                 // Small delay between paths to avoid Airtable rate limits and race conditions
                 await new Promise(resolve => setTimeout(resolve, 100));
             }
@@ -93,7 +181,8 @@ class DealManagementAutomation {
             res.json({ 
                 status: 'success', 
                 dealId: dealData.id,
-                pathsExecuted: pathsToExecute 
+                pathsExecuted: pathsToExecute,
+                airtableRecordId: sharedRecord?.recordId 
             });
             
         } catch (error) {
@@ -219,25 +308,22 @@ class DealManagementAutomation {
         return paths;
     }
 
-    async executePath(pathName, dealData, contactData, spreadsheetData, usersList, formattedUCDate) {
+    async executePath(pathName, dealData, contactData, spreadsheetData, usersList, formattedUCDate, sharedRecord) {
         console.log(`🛤️ Executing path: ${pathName}`);
         
         switch (pathName) {
             case 'isa_path':
-                await this.executeISAPath(dealData, spreadsheetData);
-                break;
+                return await this.executeISAPath(dealData, spreadsheetData, sharedRecord);
                 
             case 'agent_different_path':
-                await this.executeAgentDifferentPath(dealData, contactData, spreadsheetData, usersList);
-                break;
+                return await this.executeAgentDifferentPath(dealData, contactData, spreadsheetData, usersList, sharedRecord);
                 
             case 'no_contact_path':
-                await this.executeNoContactPath(dealData, contactData, spreadsheetData, formattedUCDate);
-                break;
+                return await this.executeNoContactPath(dealData, contactData, spreadsheetData, formattedUCDate, sharedRecord);
         }
     }
 
-    async executeISAPath(dealData, spreadsheetData) {
+    async executeISAPath(dealData, spreadsheetData, sharedRecord) {
         console.log('🎯 Executing ISA Path');
         
         // Step 23: Find Record in Airtable (skip if not found)
@@ -245,16 +331,18 @@ class DealManagementAutomation {
         
         if (!agentRecord) {
             console.log(`⚠️ ISA agent "${dealData.customISA}" not found in Airtable - skipping ISA field update`);
-            return;
+            return null;
         }
         
-        // Step 24: Update Record in Airtable (create or update transaction record)
+        // Step 24: Create initial record without FUB Deal ID (it will be auto-generated)
         const recordData = {
-            'FUB Deal ID': dealData.id.toString(), // Include the deal ID so other paths can find this record
             'ISA FUB Contact ID': agentRecord.fields['FUB Contact ID']
         };
         
-        await this.createOrUpdateAirtableRecord('Transactions Log', 'FUB Deal ID', dealData.id, recordData);
+        const result = await this.createAirtableRecord('Transactions Log', recordData);
+        console.log(`✅ ISA Path created record: ${result.id}`);
+        
+        return { recordId: result.id, record: result };
     }
 
     async executeAgentDifferentPath(dealData, contactData, spreadsheetData, usersList) {
@@ -300,7 +388,7 @@ class DealManagementAutomation {
         }
     }
 
-    async executeNoContactPath(dealData, contactData, spreadsheetData, formattedUCDate) {
+    async executeNoContactPath(dealData, contactData, spreadsheetData, formattedUCDate, sharedRecord) {
         console.log('🎯 Executing No Contact Path');
         
         // Step 32: Find Record in Airtable (stop execution if not found)
@@ -315,17 +403,13 @@ class DealManagementAutomation {
             throw new Error(`Primary agent not found for User ID: ${spreadsheetData.usersId}`);
         }
         
-        // Step 34: Create or Update Record in Airtable (all data from FUB APIs)
+        // Step 34: If we have a shared record from previous path, update it. Otherwise create new.
         const recordData = {
-            'FUB Deal ID': dealData.id,
-            'FUB Contact ID': contactData.id, // From contact API
+            'FUB Contact ID': contactData.id?.toString(), // From contact API
             'Address / Client': dealData.name, // From deal API
             'Stage': dealData.stageName, // From deal API
             'Transaction Type': dealData.pipelineName, // From deal API
-            'Primary Agent FUB Contact ID': agentRecord.fields['FUB Contact ID'],
-            'Deal Description': dealData.description, // From deal API
-            'Off-Market Share Status': dealData.customOffMarketShareStatus, // From deal API
-            'Contact Created Date': contactData.created, // From contact API, not deal
+            'Contact Created Date': contactData.created ? new Date(contactData.created).toISOString().split('T')[0] : null, // From contact API, not deal
             'Appt Set Date': dealData.customApptSetDate, // From deal API
             'Appt Scheduled For Date': dealData.customApptScheduledForDate, // From deal API
             'Appt Held Date': dealData.customApptHeldDate, // From deal API
@@ -340,7 +424,20 @@ class DealManagementAutomation {
             'Existing Transaction': dealData.customExistingTransaction // From deal API
         };
         
-        await this.createOrUpdateAirtableRecord('Transactions Log', 'FUB Deal ID', dealData.id, recordData);
+        // Clean the data
+        const cleanedData = this.cleanAirtableData(recordData);
+        
+        if (sharedRecord && sharedRecord.recordId) {
+            // Update the existing record created by ISA path
+            console.log(`🔄 Updating existing record: ${sharedRecord.recordId}`);
+            await this.updateAirtableRecord('Transactions Log', sharedRecord.recordId, cleanedData);
+            return sharedRecord;
+        } else {
+            // Create new record
+            console.log('➕ Creating new record');
+            const result = await this.createAirtableRecord('Transactions Log', cleanedData);
+            return { recordId: result.id, record: result };
+        }
     }
 
     determineCoAgent(usersList, assignedTo, dealId) {
@@ -534,9 +631,18 @@ class DealManagementAutomation {
             'FUB Contact Tags'
         ];
         
+        // Fields that should be numbers
+        const numberFields = [
+            'FUB Deal ID',
+            'FUB Contact ID',
+            'Sale Price',
+            'Primary Agent Deal %',
+            'Co-Agent Deal %'
+        ];
+        
         // Fields that might be read-only or problematic - skip these for updates
         const problematicFields = [
-            // Remove FUB Deal ID from here since we need it for creation
+            // Empty for now - let's see what actually fails
         ];
         
         for (const [key, value] of Object.entries(data)) {
@@ -548,6 +654,19 @@ class DealManagementAutomation {
             // Skip problematic fields that might be read-only
             if (problematicFields.includes(key)) {
                 console.log(`⚠️ Skipping problematic field: ${key}`);
+                continue;
+            }
+            
+            // Handle number fields - ensure they're actual numbers
+            if (numberFields.includes(key)) {
+                if (typeof value === 'string' && value.trim() !== '') {
+                    const numValue = parseFloat(value);
+                    if (!isNaN(numValue)) {
+                        cleaned[key] = numValue;
+                    }
+                } else if (typeof value === 'number') {
+                    cleaned[key] = value;
+                }
                 continue;
             }
             
@@ -595,18 +714,13 @@ class DealManagementAutomation {
                 continue;
             }
             
-            // Convert numbers to strings for ID fields
-            if (key.includes('ID') && typeof value === 'number') {
-                cleaned[key] = value.toString();
-            }
             // Handle empty strings
-            else if (value === '') {
+            if (value === '') {
                 continue; // Skip empty strings
             }
-            // Keep valid values
-            else {
-                cleaned[key] = value;
-            }
+            
+            // Keep valid values (strings, etc.)
+            cleaned[key] = value;
         }
         
         return cleaned;
