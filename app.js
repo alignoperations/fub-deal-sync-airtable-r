@@ -625,10 +625,14 @@ class DealManagementAutomation {
         // Fields that should be numbers
         const numberFields = [
             'FUB Deal ID',
-            'FUB Contact ID',
             'Sale Price',
             'Primary Agent Deal %',
             'Co-Agent Deal %'
+        ];
+        
+        // Fields that should be strings (even if they look like numbers)
+        const stringFields = [
+            'FUB Contact ID' // This might need to be a string, not a number
         ];
         
         // Fields that might be read-only or problematic - skip these for updates
@@ -645,6 +649,14 @@ class DealManagementAutomation {
             // Skip problematic fields that might be read-only
             if (problematicFields.includes(key)) {
                 console.log(`⚠️ Skipping problematic field: ${key}`);
+                continue;
+            }
+            
+            // Handle string fields - ensure they're strings
+            if (stringFields.includes(key)) {
+                if (value !== null && value !== undefined) {
+                    cleaned[key] = value.toString();
+                }
                 continue;
             }
             
