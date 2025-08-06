@@ -400,11 +400,11 @@ class DealManagementAutomation {
         
         // Step 34: If we have a shared record from previous path, update it. Otherwise create new.
         const recordData = {
-            'FUB Deal ID': dealData.id, // Try to include this as a number
+            'FUB Deal ID': dealData.id, // This works fine as a number!
             'FUB Contact ID': contactData.id, // From contact API
             'Address / Client': dealData.name, // From deal API
             'Stage': dealData.stageName, // From deal API
-            'Transaction Type': dealData.pipelineName, // From deal API
+            'Transaction Type': dealData.pipelineName, // Use the actual pipeline name from FUB (like "Buyer", "Listing", etc.)
             'Primary Agent FUB Contact ID': agentRecord.fields['FUB Contact ID'],
             'Contact Created Date': contactData.created ? new Date(contactData.created).toISOString().split('T')[0] : null, // From contact API, not deal
             'Appt Set Date': dealData.customApptSetDate, // From deal API
