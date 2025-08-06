@@ -36,7 +36,7 @@ class DealManagementAutomation {
 
       // Fetch primary contact details
       const primaryContactId = this.getFirstPeopleId(dealData.people);
-      let contactData = { id: null, assignedUserId: null, tags: [] };
+      let contactData = { id: null, assignedUserId: null, created: null, tags: [] };
       if (primaryContactId) {
         try {
           contactData = await this.getContactData(primaryContactId);
@@ -45,6 +45,26 @@ class DealManagementAutomation {
         }
       }
       console.log(`📇 Contact assignedUserId: ${contactData.assignedUserId}`);
+
+      // Prepare base fields for update
+      const updateData = {};
+      if (contactData.id) updateData['FUB Contact ID'] = contactData.id.toString();
+      updateData['Address / Client'] = dealData.name;
+      updateData['Stage'] = dealData.stageName;
+      updateData['Transaction Type'] = dealData.pipelineName;
+      if (contactData.created) updateData['Contact Created Date'] = new Date(contactData.created).toISOString().split('T')[0];
+      if (dealData.customApptSetDate) updateData['Appt Set Date'] = dealData.customApptSetDate;
+      if (dealData.customApptScheduledForDate) updateData['Appt Scheduled For Date'] = dealData.customApptScheduledForDate;
+      if (dealData.customApptHeldDate) updateData['Appt Held Date'] = dealData.customApptHeldDate;
+      if (dealData.customAttorneyReviewDate) updateData['Attorney Review Date'] = dealData.customAttorneyReviewDate;
+      // Under Contract Date mapping
+      const ucDate = dealData.pipelineName === 'Listing' || dealData.pipelineName === 'Buyer'
+        ? dealData.customContractRatifiedDate
+        : dealData.customApplicationAcceptedDate;
+      if (ucDate) updateData['Under Contract Date'] = ucDate;
+      if (dealData.projectedCloseDate) updateData['Closing Date'] = dealData.projectedCloseDate.split('T')[0];
+      if (dealData.price) updateData['Sale Price'] = dealData.price;
+      if (dealData.customExistingTransaction) updateData['Existing Transaction'] = dealData.customExistingTransaction;
 
       // Determine primary vs co-agent IDs
       const usersList = Array.isArray(dealData.users) ? dealData.users : [];
@@ -86,26 +106,19 @@ class DealManagementAutomation {
         }
       }
 
-      // Build update payload
-      const updateData = {};
-
+      // Agent linked-records and deal %
       if (primaryEmail) {
         const primaryRec = await this.findAirtableRecord('Agents', 'Company Email', primaryEmail);
         if (primaryRec) {
           updateData['Primary Agent FUB Contact ID'] = [primaryRec.id];
           console.log(`✅ Primary Agent linked-record set to [${primaryRec.id}]`);
-        } else {
-          console.log(`⚠️ No Airtable record for Company Email ${primaryEmail}`);
         }
       }
-
       if (coEmail) {
         const coRec = await this.findAirtableRecord('Agents', 'Company Email', coEmail);
         if (coRec) {
           updateData['Co-Agent FUB Contact ID'] = [coRec.id];
           console.log(`✅ Co-Agent linked-record set to [${coRec.id}]`);
-        } else {
-          console.log(`⚠️ No Airtable record for Company Email ${coEmail}`);
         }
         updateData['Primary Agent Deal %'] = 50;
         updateData['Co-Agent Deal %'] = 50;
@@ -113,28 +126,22 @@ class DealManagementAutomation {
         updateData['Primary Agent Deal %'] = 100;
       }
 
-      if (Object.keys(updateData).length) {
-        try {
-          await this.updateAirtableRecord('Transactions Log', recordId, updateData);
-        } catch (err) {
-          console.error('❌ Airtable agent update failed:', err.response?.data || err.message);
-        }
-      }
-
       // ISA update
       if (dealData.customISA) {
         console.log('🎯 Running ISA update');
         const isaRec = await this.findAirtableRecord('Agents', 'Name', dealData.customISA);
         if (isaRec) {
-          try {
-            await this.updateAirtableRecord('Transactions Log', recordId, { 'ISA FUB Contact ID': [isaRec.id] });
-          } catch (err) {
-            console.error('❌ ISA update failed:', err.response?.data || err.message);
-          }
+          updateData['ISA FUB Contact ID'] = [isaRec.id];
           console.log(`✅ ISA linked-record set to [${isaRec.id}]`);
-        } else {
-          console.log(`⚠️ ISA agent "${dealData.customISA}" not found`);
         }
+      }
+
+      // Final patch to Airtable
+      try {
+        await this.updateAirtableRecord('Transactions Log', recordId, updateData);
+        console.log('✅ All fields updated');
+      } catch (err) {
+        console.error('❌ Final Airtable update failed:', err.response?.data || err.message);
       }
 
       return res.json({ status: 'success', dealId: dealData.id, airtableRecordId: recordId });
