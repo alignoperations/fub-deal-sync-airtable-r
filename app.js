@@ -160,6 +160,13 @@ class DealManagementAutomation {
             console.log(`⚠️ ISA agent ID ${dealData.customISA} not found - skipping`);
             return sharedRecord;
         }
+        // Use Airtable record ID for linked record
+        await this.updateAirtableRecord('Transactions Log', sharedRecord.recordId, {
+            'ISA FUB Contact ID': [agentRecord.id]
+        });
+        return sharedRecord;
+    }
+        }
         await this.updateAirtableRecord('Transactions Log', sharedRecord.recordId, {
             'ISA FUB Contact ID': agentRecord.fields['FUB Contact ID'],
         });
@@ -174,6 +181,19 @@ class DealManagementAutomation {
         if (!coAgentId) {
             console.log('⚠️ Could not determine co-agent ID - skipping');
             return sharedRecord;
+        }
+        const coAgentRec = await this.findAirtableRecord('Agents', 'FUB User ID', coAgentId);
+        const splitData = {
+            'Primary Agent Deal %': 50,
+            'Co-Agent Deal %': 50
+        };
+        if (coAgentRec) {
+            // Use Airtable record ID for linked record
+            splitData['Co-Agent FUB Contact ID'] = [coAgentRec.id];
+        }
+        await this.updateAirtableRecord('Transactions Log', sharedRecord.recordId, splitData);
+        return sharedRecord;
+    }
         }
         const coAgentRec = await this.findAirtableRecord('Agents', 'FUB User ID', coAgentId);
         const splitData = { 'Primary Agent Deal %': 50, 'Co-Agent Deal %': 50 };
