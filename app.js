@@ -4,177 +4,184 @@ const axios = require('axios');
 const fs = require('fs');
 
 class DealManagementAutomation {
-    constructor(config) {
-        this.config = config;
-        this.app = express();
-        this.app.use(express.json());
-        this.setupRoutes();
-    }
+  constructor(config) {
+    this.config = config;
+    this.app = express();
+    this.app.use(express.json());
+    this.setupRoutes();
+  }
 
-    setupRoutes() {
-        this.app.post('/webhook/deal-update', this.handleDealUpdate.bind(this));
-        this.app.get('/health', (req, res) => {
-            res.json({ status: 'healthy', timestamp: new Date().toISOString() });
-        });
-    }
+  setupRoutes() {
+    this.app.post('/webhook/deal-update', this.handleDealUpdate.bind(this));
+    this.app.get('/health', (req, res) => res.json({ status: 'healthy', timestamp: new Date().toISOString() }));
+  }
 
-    async handleDealUpdate(req, res) {
+  async handleDealUpdate(req, res) {
+    try {
+      console.log('📥 Received webhook:', JSON.stringify(req.body, null, 2));
+      const dealId = req.body.resourceIds[0];
+      const dealData = await this.getDealData(dealId);
+      console.log('📊 Deal data retrieved:', JSON.stringify(dealData, null, 2));
+
+      if (!this.filterActiveDeals(dealData) || dealData.pipelineName === 'Agent Recruiting') {
+        console.log('🚫 Deal filtered out');
+        return res.json({ status: 'filtered' });
+      }
+
+      // Find or create the Transactions Log record
+      const existing = await this.findAirtableRecord('Transactions Log', 'FUB Deal ID', dealData.id);
+      let recordId;
+      if (existing) {
+        recordId = existing.id;
+        console.log(`🔍 Found existing record ${recordId}`);
+      } else {
+        const created = await this.createAirtableRecord('Transactions Log', { 'FUB Deal ID': dealData.id });
+        recordId = created.id;
+        console.log(`➕ Created stub record ${recordId}`);
+      }
+
+      // Get contact data, if any
+      const primaryContactId = this.getFirstPeopleId(dealData.people);
+      let contactData = { id: null, assignedTo: null, tags: [] };
+      if (primaryContactId) {
         try {
-            console.log('📥 Received webhook:', JSON.stringify(req.body, null, 2));
-
-            const dealId = req.body.resourceIds[0];
-            const dealData = await this.getDealData(dealId);
-            console.log('📊 Deal data retrieved:', JSON.stringify(dealData, null, 2));
-
-            if (!this.filterActiveDeals(dealData) || dealData.pipelineName === 'Agent Recruiting') {
-                console.log('🚫 Deal filtered out');
-                return res.json({ status: 'filtered' });
-            }
-
-            // Find or create Airtable record
-            const existing = await this.findAirtableRecord('Transactions Log', 'FUB Deal ID', dealData.id);
-            let sharedRecord;
-            if (existing) {
-                console.log(`🔍 Found existing record ${existing.id}`);
-                sharedRecord = { recordId: existing.id };
-            } else {
-                console.log(`➕ Creating stub record`);
-                const created = await this.createAirtableRecord('Transactions Log', { 'FUB Deal ID': dealData.id });
-                sharedRecord = { recordId: created.id };
-            }
-
-            const primaryContactId = this.getFirstPeopleId(dealData.people);
-            let contactData = { id: null, assignedTo: null, tags: [] };
-            if (primaryContactId) {
-                try {
-                    contactData = await this.getContactData(primaryContactId);
-                } catch {
-                    console.log('⚠️ Contact lookup failed');
-                }
-            }
-
-            const sheetData = await this.lookupOrCreateSpreadsheetRow(dealData.id, dealData);
-            const usersList = this.extractUsers(dealData.users);
-            const formattedUCDate = this.formatUCDate(dealData.pipelineName, sheetData);
-            const paths = this.determinePaths(sheetData, dealData, usersList);
-            console.log('🛤️ Paths:', paths);
-
-            for (const path of paths) {
-                sharedRecord = await this.executePath(path, dealData, contactData, sheetData, usersList, formattedUCDate, sharedRecord);
-                await new Promise(r => setTimeout(r, 100));
-            }
-
-            res.json({ status: 'success', dealId: dealData.id, pathsExecuted: paths, airtableRecordId: sharedRecord.recordId });
+          contactData = await this.getContactData(primaryContactId);
         } catch (err) {
-            console.error('❌ Processing error:', err.message);
-            res.status(500).json({ status: 'error', message: err.message });
+          console.log('⚠️ Contact lookup failed:', err.message);
         }
-    }
+      }
 
-    determinePaths(sheetData, dealData, usersList) {
-        const paths = [];
-        if (dealData.customISA && !sheetData.isaFubContactIdFromAirtable) paths.push('isa_path');
-        const valid = usersList.filter(u => u.id);
-        if (valid.length === 2) paths.push('agent_different_path');
-        if (valid.length === 1) paths.push('no_contact_path');
-        return paths;
-    }
+      // Build agent update payload
+      const users = this.extractUsers(dealData.users).map(u => u.id);
+      const updateData = {};
 
-    async executePath(name, dealData, contactData, sheetData, usersList, ucDate, shared) {
-        switch (name) {
-            case 'isa_path': return this.executeISAPath(dealData, shared);
-            case 'agent_different_path': return this.executeAgentDifferentPath(contactData, usersList, shared);
-            case 'no_contact_path': return this.executeNoContactPath(dealData, contactData, ucDate, shared);
-            default: return shared;
+      // Primary agent
+      if (contactData.id) {
+        const primaryRec = await this.findAirtableRecord('Agents', 'FUB User ID', contactData.id);
+        if (primaryRec) {
+          updateData['Primary Agent FUB Contact ID'] = primaryRec.fields['FUB Contact ID'];
+          console.log(`✅ Primary Agent FUB Contact ID set to ${updateData['Primary Agent FUB Contact ID']}`);
+        } else {
+          console.log(`⚠️ Primary agent record for User ID ${contactData.id} not found`);
         }
-    }
+      }
 
-    async executeISAPath(dealData, shared) {
-        console.log('🎯 ISA Path');
-        const rec = await this.findAirtableRecord('Agents', 'FUB User ID', dealData.customISA);
-        if (rec) await this.updateAirtableRecord('Transactions Log', shared.recordId, { 'ISA FUB Contact ID': [rec.id] });
-        return shared;
-    }
-
-    async executeAgentDifferentPath(contactData, usersList, shared) {
-        console.log('🎯 Agent Different Path');
-        const ids = usersList.map(u => u.id);
-        const coId = ids.find(id => id !== contactData.assignedTo);
-        if (coId) {
-            const rec = await this.findAirtableRecord('Agents', 'FUB User ID', coId);
-            const data = { 'Primary Agent Deal %': 50, 'Co-Agent Deal %': 50 };
-            if (rec) data['Co-Agent FUB Contact ID'] = [rec.id];
-            await this.updateAirtableRecord('Transactions Log', shared.recordId, data);
+      // Co-agent, if present
+      const coId = users.find(id => id !== contactData.id);
+      if (coId) {
+        const coRec = await this.findAirtableRecord('Agents', 'FUB User ID', coId);
+        if (coRec) {
+          updateData['Co-Agent FUB Contact ID'] = coRec.fields['FUB Contact ID'];
+          console.log(`✅ Co-Agent FUB Contact ID set to ${updateData['Co-Agent FUB Contact ID']}`);
+        } else {
+          console.log(`⚠️ Co-agent record for User ID ${coId} not found`);
         }
-        return shared;
-    }
+        // Split 50/50
+        updateData['Primary Agent Deal %'] = 50;
+        updateData['Co-Agent Deal %'] = 50;
+      } else {
+        // Only primary, 100%
+        updateData['Primary Agent Deal %'] = 100;
+      }
 
-    async executeNoContactPath(dealData, contactData, ucDate, shared) {
-        console.log('🎯 No Contact Path');
-        const data = {
-            'FUB Contact ID': contactData.id,
-            'Address / Client': dealData.name,
-            'Stage': dealData.stageName,
-            'Transaction Type': dealData.pipelineName,
-            'Under Contract Date': ucDate,
-            'Closing Date': dealData.projectedCloseDate,
-            'Sale Price': dealData.price,
-            'Primary Agent Deal %': 100
-        };
-        await this.updateAirtableRecord('Transactions Log', shared.recordId, data);
-        return shared;
-    }
+      // Push agent update
+      if (Object.keys(updateData).length) {
+        await this.updateAirtableRecord('Transactions Log', recordId, updateData);
+      }
 
-    getDealData(id) {
-        return axios.get(`${this.config.followUpBossApi}/deals/${id}`, {
-            headers: { Authorization: `Basic ${Buffer.from(this.config.followUpBossToken + ':').toString('base64')}` }
-        }).then(r => r.data);
-    }
-    getContactData(id) {
-        return axios.get(`${this.config.followUpBossApi}/people/${id}`, {
-            headers: { Authorization: `Basic ${Buffer.from(this.config.followUpBossToken + ':').toString('base64')}` }
-        }).then(r => r.data);
-    }
-    filterActiveDeals(d) { return d.status === 'Active' && !d.status.includes('Deleted'); }
-    getFirstPeopleId(p) { return Array.isArray(p) && p.length ? p[0].id : null; }
-    extractUsers(u) { return Array.isArray(u) ? u.map(x => ({ id: x.id })) : []; }
-    formatUCDate(name, s) { const map = { Listing: s.customContractRatifiedDate, Landlord: s.customApplicationAcceptedDate, Buyer: s.customContractRatifiedDate, Tenant: s.customApplicationAcceptedDate }; return map[name] || null; }
-    lookupOrCreateSpreadsheetRow(id) { console.log('📝 Skip Sheets'); return Promise.resolve({ usersId: id, isaFubContactIdFromAirtable: null, customContractRatifiedDate: null, customApplicationAcceptedDate: null }); }
+      // ISA (after agents)
+      if (dealData.customISA) {
+        console.log('🎯 Running ISA update');
+        const isaRec = await this.findAirtableRecord('Agents', 'Name', dealData.customISA);
+        if (isaRec) {
+          const fubContactId = isaRec.fields['FUB Contact ID'];
+          await this.updateAirtableRecord('Transactions Log', recordId, { 'ISA FUB Contact ID': fubContactId });
+          console.log(`✅ ISA FUB Contact ID set to ${fubContactId}`);
+        } else {
+          console.log(`⚠️ ISA agent "${dealData.customISA}" not found`);
+        }
+      }
 
-    findAirtableRecord(table, field, value) {
-        const id = table === 'Agents' ? this.config.airtableAgentsTable : this.config.airtableTransactionsTable;
-        return axios.get(`${this.config.airtableBaseUrl}/${id}`, { headers: { Authorization: `Bearer ${this.config.airtableToken}` }, params: { filterByFormula: `{${field}} = "${value}"`, maxRecords: 1 } })
-            .then(r => r.data.records[0] || null)
-            .catch(() => null);
+      return res.json({ status: 'success', dealId: dealData.id, airtableRecordId: recordId });
+    } catch (err) {
+      console.error('❌ Processing error:', err.message);
+      return res.status(500).json({ status: 'error', message: err.message });
     }
-    createAirtableRecord(table, data) {
-        const id = table === 'Agents' ? this.config.airtableAgentsTable : this.config.airtableTransactionsTable;
-        return axios.post(`${this.config.airtableBaseUrl}/${id}`, { fields: this.cleanAirtableData(data) }, { headers: { Authorization: `Bearer ${this.config.airtableToken}`, 'Content-Type': 'application/json' } })
-            .then(r => r.data);
-    }
-    updateAirtableRecord(table, recId, data) {
-        const id = table === 'Agents' ? this.config.airtableAgentsTable : this.config.airtableTransactionsTable;
-        return axios.patch(`${this.config.airtableBaseUrl}/${id}/${recId}`, { fields: this.cleanAirtableData(data) }, { headers: { Authorization: `Bearer ${this.config.airtableToken}`, 'Content-Type': 'application/json' } })
-            .then(r => r.data);
-    }
-    cleanAirtableData(obj) {
-        const cleaned = {};
-        Object.entries(obj).forEach(([k, v]) => { if (v != null) cleaned[k] = v; });
-        return cleaned;
-    }
+  }
 
-    start(port = process.env.PORT || 3000) {
-        this.app.listen(port, () => console.log(`🚀 Server on port ${port}`));
-    }
+  // Utility methods
+  getDealData(id) {
+    return axios.get(`${this.config.followUpBossApi}/deals/${id}`, {
+      headers: { Authorization: `Basic ${Buffer.from(this.config.followUpBossToken + ':').toString('base64')}` }
+    }).then(r => r.data);
+  }
+  getContactData(id) {
+    return axios.get(`${this.config.followUpBossApi}/people/${id}`, {
+      headers: { Authorization: `Basic ${Buffer.from(this.config.followUpBossToken + ':').toString('base64')}` }
+    }).then(r => r.data);
+  }
+  filterActiveDeals(dealData) {
+    return dealData.status === 'Active' && !dealData.status.includes('Deleted');
+  }
+  getFirstPeopleId(people) {
+    return Array.isArray(people) && people.length ? people[0].id : null;
+  }
+  extractUsers(usersArray) {
+    if (!Array.isArray(usersArray)) return [];
+    return usersArray.map(u => ({ id: u.id }));
+  }
+
+  findAirtableRecord(tableName, fieldName, value) {
+    const tableId = tableName === 'Agents'
+      ? this.config.airtableAgentsTable
+      : this.config.airtableTransactionsTable;
+    return axios.get(`${this.config.airtableBaseUrl}/${tableId}`, {
+      headers: { Authorization: `Bearer ${this.config.airtableToken}` },
+      params: { filterByFormula: `{${fieldName}} = "${value}"`, maxRecords: 1 }
+    })
+      .then(r => (r.data.records[0] || null))
+      .catch(() => null);
+  }
+  createAirtableRecord(tableName, data) {
+    const tableId = tableName === 'Agents'
+      ? this.config.airtableAgentsTable
+      : this.config.airtableTransactionsTable;
+    return axios.post(
+      `${this.config.airtableBaseUrl}/${tableId}`,
+      { fields: this.cleanAirtableData(data) },
+      { headers: { Authorization: `Bearer ${this.config.airtableToken}`, 'Content-Type': 'application/json' } }
+    ).then(r => r.data);
+  }
+  updateAirtableRecord(tableName, recordId, data) {
+    const tableId = tableName === 'Agents'
+      ? this.config.airtableAgentsTable
+      : this.config.airtableTransactionsTable;
+    return axios.patch(
+      `${this.config.airtableBaseUrl}/${tableId}/${recordId}`,
+      { fields: this.cleanAirtableData(data) },
+      { headers: { Authorization: `Bearer ${this.config.airtableToken}`, 'Content-Type': 'application/json' } }
+    ).then(r => r.data);
+  }
+  cleanAirtableData(obj) {
+    const cleaned = {};
+    Object.entries(obj).forEach(([k, v]) => {
+      if (v != null) cleaned[k] = v;
+    });
+    return cleaned;
+  }
+
+  start(port = process.env.PORT || 3000) {
+    this.app.listen(port, () => console.log(`🚀 Server on port ${port}`));
+  }
 }
 
 const config = {
-    followUpBossApi: process.env.FUB_API_URL || 'https://api.followupboss.com/v1',
-    followUpBossToken: process.env.FUB_TOKEN,
-    airtableBaseUrl: 'https://api.airtable.com/v0/appKPBEXCsXAVEJRU',
-    airtableToken: process.env.AIRTABLE_TOKEN,
-    airtableAgentsTable: 'tbloJNfjbrodWRrCk',
-    airtableTransactionsTable: 'tblQAs5EG3gU6TzT3'
+  followUpBossApi: process.env.FUB_API_URL || 'https://api.followupboss.com/v1',
+  followUpBossToken: process.env.FUB_TOKEN,
+  airtableBaseUrl: 'https://api.airtable.com/v0/appKPBEXCsXAVEJRU',
+  airtableToken: process.env.AIRTABLE_TOKEN,
+  airtableAgentsTable: 'tbloJNfjbrodWRrCk',
+  airtableTransactionsTable: 'tblQAs5EG3gU6TzT3'
 };
 
 const automation = new DealManagementAutomation(config);
