@@ -28,20 +28,106 @@ class DealManagementAutomation {
       }
 
       // Find or create Transactions Log record
-      const existing = await this.findAirtableRecord(tableName, fieldName, value) {
-    const tableId = tableName === 'Agents' ? this.config.airtableAgentsTable : this.config.airtableTransactionsTable;
-    // Case-insensitive match for email field
-    const filterFormula = fieldName === 'Company Email'
-      ? `LOWER({${fieldName}}) = "${value.toLowerCase()}"`
-      : `{${fieldName}} = "${value}"`;
-    return axios
-      .get(`${this.config.airtableBaseUrl}/${tableId}`, {
-        headers: { Authorization: `Bearer ${this.config.airtableToken}` },
-        params: { filterByFormula: filterFormula, maxRecords: 1 }
-      })
-      .then(r => r.data.records[0] || null)
-      .catch(() => null);
-  }
+      const existing = await this.findAirtableRecord('Transactions Log', 'FUB Deal ID', dealData.id);
+      const recordId = existing
+        ? existing.id
+        : (await this.createAirtableRecord('Transactions Log', { 'FUB Deal ID': dealData.id })).id;
+      console.log(existing ? `🔍 Found record ${recordId}` : `➕ Created record ${recordId}`);
+
+      // Fetch primary contact details
+      const primaryContactId = this.getFirstPeopleId(dealData.people);
+      let contactData = { id: null, assignedUserId: null, tags: [] };
+      if (primaryContactId) {
+        try {
+          contactData = await this.getContactData(primaryContactId);
+        } catch (err) {
+          console.log('⚠️ Contact lookup failed:', err.message);
+        }
+      }
+      console.log(`📇 Contact assignedUserId: ${contactData.assignedUserId}`);
+
+      // Determine primary vs co-agent IDs
+      const usersList = Array.isArray(dealData.users) ? dealData.users : [];
+      let primaryUserId = null;
+      let coUserId = null;
+
+      if (contactData.assignedUserId) {
+        primaryUserId = contactData.assignedUserId;
+        if (usersList.length > 1) {
+          coUserId = usersList.find(u => u.id !== primaryUserId)?.id;
+        }
+      } else if (usersList.length === 1) {
+        primaryUserId = usersList[0].id;
+      } else if (usersList.length > 1) {
+        primaryUserId = usersList[0].id;
+        coUserId = usersList[1].id;
+      }
+      console.log(`🎯 PrimaryUserId: ${primaryUserId}, CoUserId: ${coUserId}`);
+
+      // Fetch agent emails
+      let primaryEmail = null;
+      let coEmail = null;
+      if (primaryUserId) {
+        try {
+          const user = await this.getUserData(primaryUserId);
+          primaryEmail = user.email;
+          console.log(`ℹ️ Primary agent email: ${primaryEmail}`);
+        } catch (err) {
+          console.log('⚠️ Failed to fetch primary user email:', err.message);
+        }
+      }
+      if (coUserId) {
+        try {
+          const coUser = await this.getUserData(coUserId);
+          coEmail = coUser.email;
+          console.log(`ℹ️ Co-agent email: ${coEmail}`);
+        } catch (err) {
+          console.log('⚠️ Failed to fetch co-agent email:', err.message);
+        }
+      }
+
+      // Build update payload
+      const updateData = {};
+
+      if (primaryEmail) {
+        const primaryRec = await this.findAirtableRecord('Agents', 'Company Email', primaryEmail);
+        if (primaryRec) {
+          updateData['Primary Agent FUB Contact ID'] = [primaryRec.id];
+          console.log(`✅ Primary Agent linked-record set to [${primaryRec.id}]`);
+        } else {
+          console.log(`⚠️ No Airtable record for Company Email ${primaryEmail}`);
+        }
+      }
+
+      if (coEmail) {
+        const coRec = await this.findAirtableRecord('Agents', 'Company Email', coEmail);
+        if (coRec) {
+          updateData['Co-Agent FUB Contact ID'] = [coRec.id];
+          console.log(`✅ Co-Agent linked-record set to [${coRec.id}]`);
+        } else {
+          console.log(`⚠️ No Airtable record for Company Email ${coEmail}`);
+        }
+        updateData['Primary Agent Deal %'] = 50;
+        updateData['Co-Agent Deal %'] = 50;
+      } else {
+        updateData['Primary Agent Deal %'] = 100;
+      }
+
+      if (Object.keys(updateData).length) {
+        try {
+          await this.updateAirtableRecord('Transactions Log', recordId, updateData);
+        } catch (err) {
+          console.error('❌ Airtable agent update failed:', err.response?.data || err.message);
+        }
+      }
+
+      // ISA update
+      if (dealData.customISA) {
+        console.log('🎯 Running ISA update');
+        const isaRec = await this.findAirtableRecord('Agents', 'Name', dealData.customISA);
+        if (isaRec) {
+          try {
+            await this.updateAirtableRecord('Transactions Log', recordId, { 'ISA FUB Contact ID': [isaRec.id] });
           } catch (err) {
             console.error('❌ ISA update failed:', err.response?.data || err.message);
           }
@@ -92,14 +178,13 @@ class DealManagementAutomation {
 
   findAirtableRecord(tableName, fieldName, value) {
     const tableId = tableName === 'Agents' ? this.config.airtableAgentsTable : this.config.airtableTransactionsTable;
-    // Case-insensitive match for email field
     const filterFormula = fieldName === 'Company Email'
       ? `LOWER({${fieldName}}) = "${value.toLowerCase()}"`
       : `{${fieldName}} = "${value}"`;
     return axios
       .get(`${this.config.airtableBaseUrl}/${tableId}`, {
         headers: { Authorization: `Bearer ${this.config.airtableToken}` },
-        params: { filterByFormula, maxRecords: 1 }
+        params: { filterByFormula: filterFormula, maxRecords: 1 }
       })
       .then(r => r.data.records[0] || null)
       .catch(() => null);
