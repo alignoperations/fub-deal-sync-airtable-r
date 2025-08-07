@@ -47,8 +47,7 @@ class DealManagementAutomation {
 
       // If no contact or lookup failed, create Asana no-contact task
       if (!contactData.id) {
-        const agentName = dealData.users?.[0]?.name || 'Unknown';
-        await this.createAsanaTask(dealData, { name: agentName });
+        const notes = `Deal: ${dealData.name}\nAgent: ${agentInfo.name || 'Unknown'}\nPipeline: ${dealData.pipelineName}\nStage: ${dealData.stageName}`;
         console.log('📝 Created Asana No-Contact task');
       }
 
