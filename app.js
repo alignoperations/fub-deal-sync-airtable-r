@@ -57,6 +57,18 @@ class DealManagementAutomation {
       updateData['Address / Client'] = dealData.name;
       updateData['Stage'] = dealData.stageName;
       updateData['Transaction Type'] = dealData.pipelineName;
+      
+      // 🔥 NEW: Add Deal Description
+      if (dealData.description) updateData['Deal Description'] = dealData.description;
+      
+      // 🔥 NEW: Add FUB Contact Tags (multiselect)
+      if (contactData.tags && Array.isArray(contactData.tags) && contactData.tags.length > 0) {
+        updateData['FUB Contact Tags'] = contactData.tags;
+      }
+      
+      // 🔥 NEW: Add Off-Market Share Status
+      if (dealData.customOffMarketShareStatus) updateData['Off-Market Share Status'] = dealData.customOffMarketShareStatus;
+      
       if (contactData.created) updateData['Contact Created Date'] = new Date(contactData.created).toISOString().split('T')[0];
       if (dealData.customApptSetDate) updateData['Appt Set Date'] = dealData.customApptSetDate;
       if (dealData.customApptScheduledForDate) updateData['Appt Scheduled For Date'] = dealData.customApptScheduledForDate;
