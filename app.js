@@ -74,9 +74,14 @@ class DealManagementAutomation {
       if (dealData.customApptScheduledForDate) updateData['Appt Scheduled For Date'] = dealData.customApptScheduledForDate;
       if (dealData.customApptHeldDate) updateData['Appt Held Date'] = dealData.customApptHeldDate;
       if (dealData.customAttorneyReviewDate) updateData['Attorney Review Date'] = dealData.customAttorneyReviewDate;
-      const ucDate = ['Listing', 'Buyer'].includes(dealData.pipelineName)
-        ? dealData.customContractRatifiedDate
-        : dealData.customApplicationAcceptedDate;
+      
+      // 🔥 NEW: Add missing date fields
+      if (dealData.customSignedDate) updateData['Signed Date'] = dealData.customSignedDate;
+      if (dealData.customLiveDate) updateData['Listing Live Date'] = dealData.customLiveDate;
+      if (dealData.customListingExpirationDate) updateData['Listing Expiration Date'] = dealData.customListingExpirationDate;
+      const ucDate = ['Landlord', 'Tenant'].includes(dealData.pipelineName)
+        ? dealData.customApplicationAcceptedDate
+        : dealData.customContractRatifiedDate;
       if (ucDate) updateData['Under Contract Date'] = ucDate;
       if (dealData.projectedCloseDate) updateData['Closing Date'] = dealData.projectedCloseDate.split('T')[0];
       if (dealData.price) updateData['Sale Price'] = dealData.price;
