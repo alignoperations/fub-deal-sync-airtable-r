@@ -51,22 +51,17 @@ class DealManagementAutomation {
         console.log('📝 Created Asana No-Contact task');
       }
 
-      // Build update payload
+      // Build update payload (WITHOUT FUB Tags - we'll do those separately)
       const updateData = {};
       if (contactData.id) updateData['FUB Contact ID'] = contactData.id.toString();
       updateData['Address / Client'] = dealData.name;
       updateData['Stage'] = dealData.stageName;
       updateData['Transaction Type'] = dealData.pipelineName;
       
-      // 🔥 NEW: Add Deal Description
+      // Add Deal Description
       if (dealData.description) updateData['Deal Description'] = dealData.description;
       
-      // 🔥 NEW: Add FUB Contact Tags (multiselect)
-      if (contactData.tags && Array.isArray(contactData.tags) && contactData.tags.length > 0) {
-        updateData['FUB Contact Tags'] = contactData.tags;
-      }
-      
-      // 🔥 NEW: Add Off-Market Share Status
+      // Add Off-Market Share Status
       if (dealData.customOffMarketShareStatus) updateData['Off-Market Share Status'] = dealData.customOffMarketShareStatus;
       
       if (contactData.created) updateData['Contact Created Date'] = new Date(contactData.created).toISOString().split('T')[0];
@@ -75,10 +70,11 @@ class DealManagementAutomation {
       if (dealData.customApptHeldDate) updateData['Appt Held Date'] = dealData.customApptHeldDate;
       if (dealData.customAttorneyReviewDate) updateData['Attorney Review Date'] = dealData.customAttorneyReviewDate;
       
-      // 🔥 NEW: Add missing date fields
+      // Add missing date fields
       if (dealData.customSignedDate) updateData['Signed Date'] = dealData.customSignedDate;
       if (dealData.customLiveDate) updateData['Listing Live Date'] = dealData.customLiveDate;
       if (dealData.customListingExpirationDate) updateData['Listing Expiration Date'] = dealData.customListingExpirationDate;
+      
       const ucDate = ['Landlord', 'Tenant'].includes(dealData.pipelineName)
         ? dealData.customApplicationAcceptedDate
         : dealData.customContractRatifiedDate;
@@ -138,21 +134,83 @@ class DealManagementAutomation {
         updateData['ISA FUB Contact ID'] = [];
       }
 
-      // Final Airtable update with error handling
+      // 🔥 STEP 1: Update all fields EXCEPT FUB Tags
       try {
         await this.updateAirtableRecord('Transactions Log', recordId, updateData);
-        console.log('✅ All fields updated');
+        console.log('✅ Main fields updated successfully');
       } catch (err) {
-        console.error('❌ Airtable sync failed:', err.response?.data || err.message);
+        console.error('❌ Main Airtable sync failed:', err.response?.data || err.message);
         const summary = err.response?.data?.error?.message || err.message;
-        // Slack notification
         await this.sendSlackErrorNotification(dealData, summary, primaryContactId);
+        // Don't throw here - we still want to try FUB Tags update
       }
+
+      // 🔥 STEP 2: Separately update FUB Tags (with error handling)
+      await this.updateFUBTags(recordId, contactData);
 
       return res.json({ status: 'success' });
     } catch (err) {
       console.error('❌ Processing error:', err.message);
       return res.status(500).json({ status: 'error', message: err.message });
+    }
+  }
+
+  // 🔥 NEW: Separate FUB Tags update with enhanced error handling
+  async updateFUBTags(recordId, contactData) {
+    if (!contactData.tags || !Array.isArray(contactData.tags) || contactData.tags.length === 0) {
+      console.log('📝 No FUB tags to update');
+      return;
+    }
+
+    try {
+      console.log('🏷️ Updating FUB Contact Tags separately...');
+      
+      // Clean tags: remove special characters that might cause issues
+      const cleanedTags = contactData.tags.map(tag => {
+        return tag
+          .replace(/[^a-zA-Z0-9\s\-_]/g, '') // Remove special chars except spaces, hyphens, underscores
+          .trim()
+          .replace(/\s+/g, ' '); // Normalize whitespace
+      }).filter(tag => tag.length > 0); // Remove empty tags
+
+      console.log('🏷️ Original tags:', contactData.tags);
+      console.log('🏷️ Cleaned tags:', cleanedTags);
+
+      if (cleanedTags.length === 0) {
+        console.log('📝 No valid tags after cleaning');
+        return;
+      }
+
+      const tagsUpdateData = {
+        'FUB Contact Tags': cleanedTags
+      };
+
+      await this.updateAirtableRecord('Transactions Log', recordId, tagsUpdateData);
+      console.log('✅ FUB Contact Tags updated successfully');
+      
+    } catch (tagsError) {
+      console.error('❌ FUB Tags update failed (but main record was updated):', tagsError.response?.data || tagsError.message);
+      
+      // Try with even more restrictive cleaning
+      if (tagsError.response?.data?.error?.type === 'INVALID_MULTIPLE_CHOICE_OPTIONS') {
+        console.log('🔧 Trying with more restrictive tag cleaning...');
+        try {
+          // Only keep alphanumeric and spaces
+          const superCleanedTags = contactData.tags
+            .map(tag => tag.replace(/[^a-zA-Z0-9\s]/g, '').trim())
+            .filter(tag => tag.length > 0)
+            .slice(0, 10); // Limit to first 10 tags
+
+          if (superCleanedTags.length > 0) {
+            await this.updateAirtableRecord('Transactions Log', recordId, {
+              'FUB Contact Tags': superCleanedTags
+            });
+            console.log('✅ FUB Contact Tags updated with super cleaning');
+          }
+        } catch (finalError) {
+          console.error('❌ Final FUB Tags attempt failed:', finalError.response?.data || finalError.message);
+        }
+      }
     }
   }
 
