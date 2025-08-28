@@ -17,13 +17,13 @@ class DealManagementAutomation {
 
   async handleDealUpdate(req, res) {
     try {
-      console.log('📥 Received webhook:', JSON.stringify(req.body, null, 2));
+      console.log('Received webhook:', JSON.stringify(req.body, null, 2));
       const dealId = req.body.resourceIds[0];
       const dealData = await this.getDealData(dealId);
-      console.log('📊 Deal data retrieved:', JSON.stringify(dealData, null, 2));
+      console.log('Deal data retrieved:', JSON.stringify(dealData, null, 2));
 
       if (!this.filterActiveDeals(dealData) || dealData.pipelineName === 'Agent Recruiting') {
-        console.log('🚫 Deal filtered out');
+        console.log('Deal filtered out');
         return res.json({ status: 'filtered' });
       }
 
@@ -32,26 +32,26 @@ class DealManagementAutomation {
       const recordId = existing
         ? existing.id
         : (await this.createAirtableRecord('Transactions Log', { 'FUB Deal ID': dealData.id })).id;
-      console.log(existing ? `🔍 Found record ${recordId}` : `➕ Created record ${recordId}`);
+      console.log(existing ? `Found record ${recordId}` : `Created record ${recordId}`);
 
       // Fetch primary contact details
       const primaryContactId = this.getFirstPeopleId(dealData.people);
-      let contactData = { id: null, assignedUserId: null, created: null, tags: [] };
+      let contactData = { id: null, assignedUserId: null, created: null, tags: [], source: null };
       if (primaryContactId) {
         try {
           contactData = await this.getContactData(primaryContactId);
         } catch (err) {
-          console.log('⚠️ Contact lookup failed:', err.message);
+          console.log('Contact lookup failed:', err.message);
         }
       }
 
       // If no contact or lookup failed, create Asana no-contact task
       if (!contactData.id) {
         const notes = `Deal: ${dealData.name}\nAgent: ${agentInfo.name || 'Unknown'}\nPipeline: ${dealData.pipelineName}\nStage: ${dealData.stageName}`;
-        console.log('📝 Created Asana No-Contact task');
+        console.log('Created Asana No-Contact task');
       }
 
-      // Build update payload (WITHOUT FUB Tags - we'll do those separately)
+      // Build update payload
       const updateData = {};
       if (contactData.id) updateData['FUB Contact ID'] = contactData.id.toString();
       updateData['Address / Client'] = dealData.name;
@@ -61,8 +61,26 @@ class DealManagementAutomation {
       // Add Deal Description
       if (dealData.description) updateData['Deal Description'] = dealData.description;
       
+      // Add FUB Contact Tags (multiselect)
+      if (contactData.tags && Array.isArray(contactData.tags) && contactData.tags.length > 0) {
+        updateData['FUB Contact Tags'] = contactData.tags;
+      }
+      
       // Add Off-Market Share Status
       if (dealData.customOffMarketShareStatus) updateData['Off-Market Share Status'] = dealData.customOffMarketShareStatus;
+      
+      // Handle contact source lookup/creation
+      if (contactData.source) {
+        try {
+          const sourceRecordId = await this.findOrCreateTransactionSource(contactData.source);
+          if (sourceRecordId) {
+            updateData['Source'] = [sourceRecordId];
+            console.log(`Source linked: ${contactData.source} -> ${sourceRecordId}`);
+          }
+        } catch (sourceError) {
+          console.error('Failed to handle source:', sourceError.message);
+        }
+      }
       
       if (contactData.created) updateData['Contact Created Date'] = new Date(contactData.created).toISOString().split('T')[0];
       if (dealData.customApptSetDate) updateData['Appt Set Date'] = dealData.customApptSetDate;
@@ -113,14 +131,32 @@ class DealManagementAutomation {
           if (existingPrim[0] !== primRec.id) updateData['Primary Agent FUB Contact ID'] = [primRec.id];
         }
       }
+      
       if (coEmail) {
         const coRec = await this.findAirtableRecord('Agents', 'Company Email', coEmail);
         if (coRec) {
-          const existingCo = existing?.fields['Co-Agent FUB Contact ID'] || [];
-          if (existingCo[0] !== coRec.id) updateData['Co-Agent FUB Contact ID'] = [coRec.id];
+          // Check if co-agent has a valid role
+          const validRoles = ['Agent', 'Mentor', 'Team Leader', 'Director of Sales', 'Location Leader', 'Production Partner'];
+          const coAgentRole = coRec.fields['Role'];
+          
+          if (validRoles.includes(coAgentRole)) {
+            const existingCo = existing?.fields['Co-Agent FUB Contact ID'] || [];
+            if (existingCo[0] !== coRec.id) updateData['Co-Agent FUB Contact ID'] = [coRec.id];
+            updateData['Primary Agent Deal %'] = 50;
+            updateData['Co-Agent Deal %'] = 50;
+            console.log(`Co-agent added: ${coEmail} with role: ${coAgentRole}`);
+          } else {
+            console.log(`Co-agent rejected: ${coEmail} has invalid role: ${coAgentRole}. Valid roles: ${validRoles.join(', ')}`);
+            // Still give primary agent 100% since co-agent was rejected
+            const existingPercent = existing?.fields['Primary Agent Deal %'];
+            if (existingPercent == null) updateData['Primary Agent Deal %'] = 100;
+          }
+        } else {
+          console.log(`Co-agent not found in Airtable: ${coEmail}`);
+          // Still give primary agent 100% since co-agent not found
+          const existingPercent = existing?.fields['Primary Agent Deal %'];
+          if (existingPercent == null) updateData['Primary Agent Deal %'] = 100;
         }
-        updateData['Primary Agent Deal %'] = 50;
-        updateData['Co-Agent Deal %'] = 50;
       } else if (usersList.length === 1) {
         const existingPercent = existing?.fields['Primary Agent Deal %'];
         if (existingPercent == null) updateData['Primary Agent Deal %'] = 100;
@@ -134,83 +170,49 @@ class DealManagementAutomation {
         updateData['ISA FUB Contact ID'] = [];
       }
 
-      // 🔥 STEP 1: Update all fields EXCEPT FUB Tags
+      // Final Airtable update with error handling
       try {
         await this.updateAirtableRecord('Transactions Log', recordId, updateData);
-        console.log('✅ Main fields updated successfully');
+        console.log('All fields updated');
       } catch (err) {
-        console.error('❌ Main Airtable sync failed:', err.response?.data || err.message);
+        console.error('Airtable sync failed:', err.response?.data || err.message);
         const summary = err.response?.data?.error?.message || err.message;
+        // Slack notification
         await this.sendSlackErrorNotification(dealData, summary, primaryContactId);
-        // Don't throw here - we still want to try FUB Tags update
       }
-
-      // 🔥 STEP 2: Separately update FUB Tags (with error handling)
-      await this.updateFUBTags(recordId, contactData);
 
       return res.json({ status: 'success' });
     } catch (err) {
-      console.error('❌ Processing error:', err.message);
+      console.error('Processing error:', err.message);
       return res.status(500).json({ status: 'error', message: err.message });
     }
   }
 
-  // 🔥 NEW: Separate FUB Tags update with enhanced error handling
-  async updateFUBTags(recordId, contactData) {
-    if (!contactData.tags || !Array.isArray(contactData.tags) || contactData.tags.length === 0) {
-      console.log('📝 No FUB tags to update');
-      return;
-    }
-
+  // NEW: Find or create transaction source
+  async findOrCreateTransactionSource(sourceName) {
     try {
-      console.log('🏷️ Updating FUB Contact Tags separately...');
+      console.log(`Looking up transaction source: ${sourceName}`);
       
-      // Clean tags: remove special characters that might cause issues
-      const cleanedTags = contactData.tags.map(tag => {
-        return tag
-          .replace(/[^a-zA-Z0-9\s\-_]/g, '') // Remove special chars except spaces, hyphens, underscores
-          .trim()
-          .replace(/\s+/g, ' '); // Normalize whitespace
-      }).filter(tag => tag.length > 0); // Remove empty tags
-
-      console.log('🏷️ Original tags:', contactData.tags);
-      console.log('🏷️ Cleaned tags:', cleanedTags);
-
-      if (cleanedTags.length === 0) {
-        console.log('📝 No valid tags after cleaning');
-        return;
+      // First, try to find existing source
+      let sourceRecord = await this.findAirtableRecord('Transaction Sources', 'Name', sourceName);
+      
+      if (sourceRecord) {
+        console.log(`Found existing source: ${sourceName} -> ${sourceRecord.id}`);
+        return sourceRecord.id;
       }
-
-      const tagsUpdateData = {
-        'FUB Contact Tags': cleanedTags
-      };
-
-      await this.updateAirtableRecord('Transactions Log', recordId, tagsUpdateData);
-      console.log('✅ FUB Contact Tags updated successfully');
       
-    } catch (tagsError) {
-      console.error('❌ FUB Tags update failed (but main record was updated):', tagsError.response?.data || tagsError.message);
+      // If not found, create new source record
+      console.log(`Creating new source: ${sourceName}`);
+      const newSource = await this.createAirtableRecord('Transaction Sources', {
+        'Name': sourceName
+      });
       
-      // Try with even more restrictive cleaning
-      if (tagsError.response?.data?.error?.type === 'INVALID_MULTIPLE_CHOICE_OPTIONS') {
-        console.log('🔧 Trying with more restrictive tag cleaning...');
-        try {
-          // Only keep alphanumeric and spaces
-          const superCleanedTags = contactData.tags
-            .map(tag => tag.replace(/[^a-zA-Z0-9\s]/g, '').trim())
-            .filter(tag => tag.length > 0)
-            .slice(0, 10); // Limit to first 10 tags
-
-          if (superCleanedTags.length > 0) {
-            await this.updateAirtableRecord('Transactions Log', recordId, {
-              'FUB Contact Tags': superCleanedTags
-            });
-            console.log('✅ FUB Contact Tags updated with super cleaning');
-          }
-        } catch (finalError) {
-          console.error('❌ Final FUB Tags attempt failed:', finalError.response?.data || finalError.message);
-        }
-      }
+      console.log(`Created new source: ${sourceName} -> ${newSource.id}`);
+      return newSource.id;
+      
+    } catch (error) {
+      console.error(`Error handling source ${sourceName}:`, error.message);
+      throw error;
     }
   }
 
@@ -267,7 +269,15 @@ class DealManagementAutomation {
   }
 
   async findAirtableRecord(tableName, fieldName, searchValue) {
-    const tableId = tableName === 'Agents' ? this.config.airtableAgentsTable : this.config.airtableTransactionsTable;
+    let tableId;
+    if (tableName === 'Agents') {
+      tableId = this.config.airtableAgentsTable;
+    } else if (tableName === 'Transaction Sources') {
+      tableId = this.config.airtableTransactionSourcesTable;
+    } else {
+      tableId = this.config.airtableTransactionsTable;
+    }
+    
     const resp = await axios.get(
       `${this.config.airtableBaseUrl}/${tableId}`,
       {
@@ -279,7 +289,15 @@ class DealManagementAutomation {
   }
 
   async createAirtableRecord(tableName, recordData) {
-    const tableId = tableName === 'Agents' ? this.config.airtableAgentsTable : this.config.airtableTransactionsTable;
+    let tableId;
+    if (tableName === 'Agents') {
+      tableId = this.config.airtableAgentsTable;
+    } else if (tableName === 'Transaction Sources') {
+      tableId = this.config.airtableTransactionSourcesTable;
+    } else {
+      tableId = this.config.airtableTransactionsTable;
+    }
+    
     const resp = await axios.post(
       `${this.config.airtableBaseUrl}/${tableId}`,
       { fields: recordData },
@@ -289,7 +307,15 @@ class DealManagementAutomation {
   }
 
   async updateAirtableRecord(tableName, recordId, recordData) {
-    const tableId = tableName === 'Agents' ? this.config.airtableAgentsTable : this.config.airtableTransactionsTable;
+    let tableId;
+    if (tableName === 'Agents') {
+      tableId = this.config.airtableAgentsTable;
+    } else if (tableName === 'Transaction Sources') {
+      tableId = this.config.airtableTransactionSourcesTable;
+    } else {
+      tableId = this.config.airtableTransactionsTable;
+    }
+    
     const resp = await axios.patch(
       `${this.config.airtableBaseUrl}/${tableId}/${recordId}`,
       { fields: recordData },
@@ -306,6 +332,7 @@ const config = {
   airtableToken: process.env.AIRTABLE_TOKEN,
   airtableAgentsTable: process.env.AIRTABLE_AGENTS_TABLE,
   airtableTransactionsTable: process.env.AIRTABLE_TRANSACTIONS_TABLE,
+  airtableTransactionSourcesTable: process.env.AIRTABLE_TRANSACTION_SOURCES_TABLE,
   asana: {
     accessToken: process.env.ASANA_TOKEN,
     projectNoContact: '1209646560314018',
