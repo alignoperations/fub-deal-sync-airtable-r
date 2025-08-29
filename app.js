@@ -41,9 +41,20 @@ class DealManagementAutomation {
       // Log the exact payload being sent to Airtable
       console.log(`🔍 DEBUG: Sending to Airtable:`, JSON.stringify(updateData, null, 2));
       
+      // For tags, let's also inspect the raw HTTP payload
+      if (fieldName === 'FUB Contact Tags') {
+        console.log('🔍 DEBUG: Raw JSON string being sent:', JSON.stringify(updateData));
+        console.log('🔍 DEBUG: Field value type check:', typeof fieldValue, Array.isArray(fieldValue));
+        console.log('🔍 DEBUG: Each tag raw bytes:', fieldValue.map(tag => ({
+          tag: tag,
+          length: tag.length,
+          charCodes: [...tag].map(char => char.charCodeAt(0))
+        })));
+      }
+      
       await this.updateAirtableRecord('Transactions Log', recordId, updateData);
       console.log(`✅ ${description} updated successfully`);
-      return true;
+      return { success: true, field: fieldName, description };
     } catch (error) {
       console.error(`❌ ${description} failed:`, {
         message: error.message,
@@ -69,22 +80,21 @@ class DealManagementAutomation {
             const cleanUpdateData = { [fieldName]: cleanedTags };
             await this.updateAirtableRecord('Transactions Log', recordId, cleanUpdateData);
             console.log(`✅ ${description} updated successfully with cleaned data`);
-            return true;
+            return { success: true, field: fieldName, description, cleaned: true };
           }
         } catch (cleanupError) {
           console.error('❌ Cleanup attempt also failed:', cleanupError.response?.data || cleanupError.message);
         }
       }
       
-      // Send individual field error notification
-      try {
-        const errorMsg = `Field update failed - ${description}: ${error.message}`;
-        await this.sendSlackErrorNotification({ name: `Record ${recordId}` }, errorMsg, null);
-      } catch (slackError) {
-        console.error('Failed to send field error notification:', slackError.message);
-      }
-      
-      return false;
+      // Return error info instead of sending individual Slack messages
+      return { 
+        success: false, 
+        field: fieldName, 
+        description, 
+        error: error.message,
+        details: error.response?.data?.error?.message || error.message
+      };
     }
   }
 
@@ -375,23 +385,47 @@ class DealManagementAutomation {
       }
 
       // Summary of results
-      const successCount = updateResults.filter(result => result === true).length;
-      const totalAttempts = updateResults.length;
-      const failureCount = totalAttempts - successCount;
+      const results = updateResults.filter(r => r && typeof r === 'object');
+      const successCount = results.filter(r => r.success === true).length;
+      const failedResults = results.filter(r => r.success === false);
+      const totalAttempts = results.length;
+      const failureCount = failedResults.length;
 
-      console.log(`📊 Update Summary: ${successCount}/${totalAttempts} fields updated successfully`);
+      console.log(`Update Summary: ${successCount}/${totalAttempts} fields updated successfully`);
       
       if (failureCount > 0) {
-        console.log(`⚠️  ${failureCount} fields failed to update (check individual errors above)`);
+        console.log(`${failureCount} fields failed to update (check individual errors above)`);
       }
 
-      // Send summary notification if there were significant failures
-      if (failureCount > totalAttempts * 0.5) { // If more than 50% failed
+      // Send single consolidated Slack notification for all errors
+      if (failedResults.length > 0) {
         try {
-          const summaryMsg = `Multiple field failures: ${failureCount}/${totalAttempts} fields failed to update for deal "${dealData.name}"`;
-          await this.sendSlackErrorNotification(dealData, summaryMsg, primaryContactId);
+          let errorSummary = `*Deal Sync Errors*\nDeal: *${dealData.name}*\n\n`;
+          
+          // Group similar errors
+          const errorGroups = {};
+          failedResults.forEach(result => {
+            const key = result.details || result.error;
+            if (!errorGroups[key]) {
+              errorGroups[key] = [];
+            }
+            errorGroups[key].push(result.description);
+          });
+          
+          // Build error message
+          Object.entries(errorGroups).forEach(([error, fields]) => {
+            errorSummary += `• **${error}**\n  Fields: ${fields.join(', ')}\n\n`;
+          });
+          
+          errorSummary += `Success Rate: ${successCount}/${totalAttempts} (${Math.round(successCount/totalAttempts*100)}%)`;
+          
+          if (primaryContactId) {
+            errorSummary += `\nFUB Person: <https://align.followupboss.com/2/people/view/${primaryContactId}|View Contact>`;
+          }
+          
+          await this.sendSlackErrorNotification(dealData, errorSummary, null);
         } catch (slackError) {
-          console.error('Failed to send summary notification:', slackError.message);
+          console.error('Failed to send consolidated error notification:', slackError.message);
         }
       }
 
