@@ -15,7 +15,6 @@ class DealManagementAutomation {
     this.app.get('/health', (req, res) => res.json({ status: 'healthy', timestamp: new Date().toISOString() }));
   }
 
-  // Helper method for safe individual field updates
   async updateFieldSafely(recordId, fieldName, fieldValue, description) {
     try {
       // Special handling for tags to debug the issue
@@ -89,7 +88,6 @@ class DealManagementAutomation {
     }
   }
 
-  // Alternative: Try updating tags in smaller batches
   async updateTagsInBatches(recordId, tags, description) {
     console.log(`🔄 Attempting to update tags in smaller batches...`);
     
@@ -410,7 +408,6 @@ class DealManagementAutomation {
     }
   }
 
-  // Find or create transaction source
   async findOrCreateTransactionSource(sourceName) {
     try {
       console.log(`Looking up transaction source: ${sourceName}`);
@@ -477,7 +474,6 @@ class DealManagementAutomation {
     }
   }
 
-  // Asana task for no contact
   async createAsanaTask(dealData, agentInfo) {
     const taskName = `No Contact Attached - ${dealData.name || 'Deal'}`;
     const notes = `Deal: ${dealData.name}\nAgent: ${agentInfo.name || 'Unknown'}\nPipeline: ${dealData.pipelineName}`;
@@ -486,7 +482,6 @@ class DealManagementAutomation {
     await axios.post('https://app.asana.com/api/1.0/tasks', payload, { headers: { Authorization: `Bearer ${this.config.asana.accessToken}` } });
   }
 
-  // Slack error DM
   async sendSlackErrorNotification(dealData, summary, contactId) {
     const channel = this.config.slack.channelJulianna;
     const contactLink = contactId ? `<https://align.followupboss.com/2/people/view/${contactId}|View Contact>` : 'No contact';
@@ -494,7 +489,6 @@ class DealManagementAutomation {
     await axios.post('https://slack.com/api/chat.postMessage', { channel, text }, { headers: { Authorization: `Bearer ${this.config.slack.botToken}`, 'Content-Type':'application/json' } });
   }
 
-  // FUB + Airtable helpers
   async getDealData(dealId) {
     const response = await axios.get(
       `${this.config.followUpBossApi}/deals/${dealId}`,
