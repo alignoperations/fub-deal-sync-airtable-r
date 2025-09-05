@@ -54,7 +54,7 @@ class DealManagementAutomation {
       
       await this.updateAirtableRecord('Transactions Log', recordId, updateData);
       console.log(`✅ ${description} updated successfully`);
-      return { success: true, field: fieldName, description };
+      return true;
     } catch (error) {
       console.error(`❌ ${description} failed:`, {
         message: error.message,
@@ -80,21 +80,22 @@ class DealManagementAutomation {
             const cleanUpdateData = { [fieldName]: cleanedTags };
             await this.updateAirtableRecord('Transactions Log', recordId, cleanUpdateData);
             console.log(`✅ ${description} updated successfully with cleaned data`);
-            return { success: true, field: fieldName, description, cleaned: true };
+            return true;
           }
         } catch (cleanupError) {
           console.error('❌ Cleanup attempt also failed:', cleanupError.response?.data || cleanupError.message);
         }
       }
       
-      // Return error info instead of sending individual Slack messages
-      return { 
-        success: false, 
-        field: fieldName, 
-        description, 
-        error: error.message,
-        details: error.response?.data?.error?.message || error.message
-      };
+      // Send individual field error notification
+      try {
+        const errorMsg = `Field update failed - ${description}: ${error.message}`;
+        await this.sendSlackErrorNotification({ name: `Record ${recordId}` }, errorMsg, null);
+      } catch (slackError) {
+        console.error('Failed to send field error notification:', slackError.message);
+      }
+      
+      return false;
     }
   }
 
@@ -344,10 +345,23 @@ class DealManagementAutomation {
             updateResults.push(await this.updateFieldSafely(recordId, 'ISA FUB Contact ID', [isaRec.id], 'ISA Assignment'));
           } else {
             console.log(`ISA not found in Airtable: ${dealData.customISA}`);
+            updateResults.push({ 
+              success: false, 
+              field: 'ISA FUB Contact ID', 
+              description: 'ISA Assignment', 
+              error: 'ISA not found in Airtable',
+              details: `ISA name "${dealData.customISA}" not found in Agents table`
+            });
           }
         } catch (isaError) {
           console.error('ISA lookup failed:', isaError.message);
-          updateResults.push(false);
+          updateResults.push({ 
+            success: false, 
+            field: 'ISA FUB Contact ID', 
+            description: 'ISA Assignment', 
+            error: isaError.message,
+            details: `ISA lookup failed: ${isaError.message}`
+          });
         }
       } else {
         updateResults.push(await this.updateFieldSafely(recordId, 'ISA FUB Contact ID', [], 'ISA Clear'));
@@ -361,10 +375,24 @@ class DealManagementAutomation {
           
           if (sourceRecordId) {
             updateResults.push(await this.updateFieldSafely(recordId, 'Source', [sourceRecordId], `Source (${contactData.source})`));
+          } else {
+            updateResults.push({ 
+              success: false, 
+              field: 'Source', 
+              description: `Source (${contactData.source})`, 
+              error: 'Failed to find or create source',
+              details: `Could not find or create source: ${contactData.source}`
+            });
           }
         } catch (sourceError) {
           console.error('❌ Source lookup/creation failed:', sourceError.message);
-          updateResults.push(false);
+          updateResults.push({ 
+            success: false, 
+            field: 'Source', 
+            description: `Source (${contactData.source})`, 
+            error: sourceError.message,
+            details: `Source lookup/creation failed: ${sourceError.message}`
+          });
         }
       }
 
