@@ -412,27 +412,38 @@ class DealManagementAutomation {
         updateResults.push(tagSuccess);
       }
 
-      // Summary of results
-      const results = updateResults.filter(r => r && typeof r === 'object');
-      const successCount = results.filter(r => r.success === true).length;
-      const failedResults = results.filter(r => r.success === false);
-      const totalAttempts = results.length;
-      const failureCount = failedResults.length;
+      // Summary of results - fix the filtering to include all results
+      const allResults = updateResults.filter(r => r !== null && r !== undefined);
+      const objectResults = allResults.filter(r => typeof r === 'object' && r.hasOwnProperty('success'));
+      const booleanResults = allResults.filter(r => typeof r === 'boolean');
+      
+      // Count successes from both object and boolean results
+      const objectSuccesses = objectResults.filter(r => r.success === true).length;
+      const booleanSuccesses = booleanResults.filter(r => r === true).length;
+      const successCount = objectSuccesses + booleanSuccesses;
+      
+      // Count failures
+      const objectFailures = objectResults.filter(r => r.success === false);
+      const booleanFailures = booleanResults.filter(r => r === false).length;
+      const failureCount = objectFailures.length + booleanFailures;
+      
+      const totalAttempts = allResults.length;
 
-      console.log(`Update Summary: ${successCount}/${totalAttempts} fields updated successfully`);
+      console.log(`📊 Update Summary: ${successCount}/${totalAttempts} fields updated successfully`);
+      console.log(`📊 Result breakdown: ${objectResults.length} object results, ${booleanResults.length} boolean results`);
       
       if (failureCount > 0) {
-        console.log(`${failureCount} fields failed to update (check individual errors above)`);
+        console.log(`⚠️ ${failureCount} fields failed to update (check individual errors above)`);
       }
 
-      // Send single consolidated Slack notification for all errors
-      if (failedResults.length > 0) {
+      // Send single consolidated Slack notification for all errors (only object failures have details)
+      if (objectFailures.length > 0) {
         try {
           let errorSummary = `*Deal Sync Errors*\nDeal: *${dealData.name}*\n\n`;
           
           // Group similar errors
           const errorGroups = {};
-          failedResults.forEach(result => {
+          objectFailures.forEach(result => {
             const key = result.details || result.error;
             if (!errorGroups[key]) {
               errorGroups[key] = [];
