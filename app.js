@@ -402,11 +402,9 @@ class DealManagementAutomation {
                     updateResults.push(await this.updateFieldSafely(recordId, 'Primary Agent FUB Contact ID', [primRecByName.id], 'Primary Agent (Name Match)'));
                   } else {
                     console.log(`✅ Primary agent already correctly set (name match)`);
-                    updateResults.push(true);
-                  }
+updateResults[updateResults.length - 1] = true;                  }
                   
                   // Skip the error logging since we found and assigned the agent
-                  continue; // This will skip the error assignment below
                 } else {
                   console.log(`❌ Agent not found by name either`);
                 }
