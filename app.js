@@ -182,28 +182,6 @@ class DealManagementAutomation {
         }
       }
 
-      // Get agent information for later use
-      const usersList = Array.isArray(dealData.users) ? dealData.users : [];
-      let primaryUserId = null;
-      let coUserId = null;
-      if (usersList.length === 1) {
-        primaryUserId = usersList[0].id;
-      } else if (usersList.length > 1 && contactData.assignedUserId) {
-        primaryUserId = contactData.assignedUserId;
-        coUserId = usersList.find(u => u.id !== primaryUserId)?.id;
-      } else if (usersList.length > 1) {
-        primaryUserId = usersList[0].id;
-        coUserId = usersList[1].id;
-      }
-
-      // Fetch emails
-      let primaryEmail = null;
-      let coEmail = null;
-      if (primaryUserId) {
-        try { primaryEmail = (await this.getUserData(primaryUserId)).email; } catch {} }
-      if (coUserId) {
-        try { coEmail = (await this.getUserData(coUserId)).email; } catch {} }
-
       console.log('🚀 Starting individual field updates...');
       const updateResults = [];
 
@@ -280,23 +258,189 @@ class DealManagementAutomation {
         updateResults.push(await this.updateFieldSafely(recordId, 'Existing Transaction', dealData.customExistingTransaction, 'Existing Transaction'));
       }
 
-      // AGENT FIELDS - Primary Agent
-      if (primaryEmail) {
-        try {
-          const primRec = await this.findAirtableRecord('Agents', 'Company Email', primaryEmail);
-          if (primRec) {
-            const existingPrim = existing?.fields['Primary Agent FUB Contact ID'] || [];
-            if (existingPrim[0] !== primRec.id) {
-              updateResults.push(await this.updateFieldSafely(recordId, 'Primary Agent FUB Contact ID', [primRec.id], 'Primary Agent'));
-            }
+      // ENHANCED AGENT ASSIGNMENT WITH COMPREHENSIVE ERROR HANDLING
+      console.log('👥 AGENT DEBUGGING - Starting agent assignment process');
+      console.log('Deal users:', JSON.stringify(dealData.users, null, 2));
+      console.log('Contact assigned user ID:', contactData.assignedUserId);
+
+      const usersList = Array.isArray(dealData.users) ? dealData.users : [];
+      let primaryUserId = null;
+      let coUserId = null;
+      let agentAssignmentReason = '';
+
+      // Agent assignment logic with logging
+      if (usersList.length === 0) {
+        console.log('❌ No users found on deal');
+        agentAssignmentReason = 'No users on deal';
+      } else if (usersList.length === 1) {
+        primaryUserId = usersList[0].id;
+        agentAssignmentReason = 'Single user on deal';
+        console.log(`✅ Single user assignment: ${primaryUserId} (${usersList[0].name})`);
+      } else if (usersList.length > 1) {
+        console.log('🔄 Multiple users found, determining primary...');
+        
+        if (contactData.assignedUserId) {
+          // Check if assigned user is in the deal users list
+          const assignedUserInDeal = usersList.find(u => u.id === contactData.assignedUserId);
+          if (assignedUserInDeal) {
+            primaryUserId = contactData.assignedUserId;
+            coUserId = usersList.find(u => u.id !== primaryUserId)?.id;
+            agentAssignmentReason = `Contact assigned to user ${primaryUserId}`;
+            console.log(`✅ Using contact assignment: Primary=${primaryUserId}, Co=${coUserId}`);
+          } else {
+            console.log(`⚠️ Contact assigned user ${contactData.assignedUserId} not in deal users`);
+            primaryUserId = usersList[0].id;
+            coUserId = usersList[1].id;
+            agentAssignmentReason = 'Contact assigned user not in deal, using first user';
+            console.log(`✅ Fallback assignment: Primary=${primaryUserId}, Co=${coUserId}`);
           }
-        } catch (agentError) {
-          console.error('Primary agent lookup failed:', agentError.message);
-          updateResults.push(false);
+        } else {
+          primaryUserId = usersList[0].id;
+          coUserId = usersList[1].id;
+          agentAssignmentReason = 'No contact assignment, using first user';
+          console.log(`✅ Default assignment: Primary=${primaryUserId}, Co=${coUserId}`);
         }
       }
-      
-      // Co-Agent Logic
+
+      console.log(`📋 Agent Assignment Summary: ${agentAssignmentReason}`);
+
+      // Enhanced email fetching with detailed error logging
+      let primaryEmail = null;
+      let coEmail = null;
+      let primaryUserData = null;
+      let coUserData = null;
+
+      // PRIMARY AGENT EMAIL FETCH
+      if (primaryUserId) {
+        console.log(`🔍 Fetching primary user data for ID: ${primaryUserId}`);
+        try {
+          primaryUserData = await this.getUserData(primaryUserId);
+          primaryEmail = primaryUserData.email;
+          console.log(`✅ Primary user email: ${primaryEmail}`);
+          console.log(`📊 Primary user details:`, {
+            id: primaryUserData.id,
+            name: primaryUserData.name,
+            email: primaryUserData.email,
+            role: primaryUserData.role
+          });
+        } catch (primaryError) {
+          console.error(`❌ CRITICAL: Failed to fetch primary user ${primaryUserId}:`, {
+            message: primaryError.message,
+            status: primaryError.response?.status,
+            data: primaryError.response?.data
+          });
+          
+          // Add this to updateResults so it gets tracked as a failure
+          updateResults.push({
+            success: false,
+            field: 'Primary Agent FUB Contact ID',
+            description: 'Primary Agent',
+            error: 'Failed to fetch user email from FollowUpBoss',
+            details: `User ID ${primaryUserId}: ${primaryError.message}`
+          });
+        }
+      }
+
+      // CO-AGENT EMAIL FETCH
+      if (coUserId) {
+        console.log(`🔍 Fetching co-user data for ID: ${coUserId}`);
+        try {
+          coUserData = await this.getUserData(coUserId);
+          coEmail = coUserData.email;
+          console.log(`✅ Co-user email: ${coEmail}`);
+        } catch (coError) {
+          console.error(`❌ Failed to fetch co-user ${coUserId}:`, {
+            message: coError.message,
+            status: coError.response?.status,
+            data: coError.response?.data
+          });
+        }
+      }
+
+      console.log(`📧 Email Fetch Summary: Primary=${primaryEmail || 'FAILED'}, Co=${coEmail || 'N/A'}`);
+
+      // PRIMARY AGENT AIRTABLE LOOKUP AND UPDATE
+      if (primaryEmail) {
+        console.log(`🔍 Looking up primary agent in Airtable by email: ${primaryEmail}`);
+        try {
+          const primRec = await this.findAirtableRecord('Agents', 'Company Email', primaryEmail);
+          
+          if (primRec) {
+            console.log(`✅ Found primary agent in Airtable:`, {
+              id: primRec.id,
+              name: primRec.fields.Name,
+              email: primRec.fields['Company Email'],
+              role: primRec.fields.Role
+            });
+            
+            const existingPrim = existing?.fields['Primary Agent FUB Contact ID'] || [];
+            console.log(`🔍 Current primary agent in record: ${existingPrim[0] || 'None'}`);
+            
+            if (existingPrim[0] !== primRec.id) {
+              console.log(`🔄 Updating primary agent from ${existingPrim[0] || 'None'} to ${primRec.id}`);
+              updateResults.push(await this.updateFieldSafely(recordId, 'Primary Agent FUB Contact ID', [primRec.id], 'Primary Agent'));
+            } else {
+              console.log(`✅ Primary agent already correctly set`);
+              updateResults.push(true); // Track as success, no update needed
+            }
+          } else {
+            console.error(`❌ PRIMARY AGENT NOT FOUND in Airtable for email: ${primaryEmail}`);
+            
+            // Try alternative lookups
+            if (primaryUserData?.name) {
+              console.log(`🔍 Trying lookup by name: ${primaryUserData.name}`);
+              try {
+                const primRecByName = await this.findAirtableRecord('Agents', 'Name', primaryUserData.name);
+                if (primRecByName) {
+                  console.log(`✅ Found agent by name with different email: ${primRecByName.fields['Company Email']}`);
+                } else {
+                  console.log(`❌ Agent not found by name either`);
+                }
+              } catch (nameError) {
+                console.log(`❌ Name lookup also failed: ${nameError.message}`);
+              }
+            }
+            
+            updateResults.push({
+              success: false,
+              field: 'Primary Agent FUB Contact ID',
+              description: 'Primary Agent',
+              error: 'Agent not found in Airtable',
+              details: `Email ${primaryEmail} not found in Agents table. User: ${primaryUserData?.name || 'Unknown'}`
+            });
+          }
+        } catch (agentLookupError) {
+          console.error(`❌ Primary agent Airtable lookup failed:`, {
+            message: agentLookupError.message,
+            status: agentLookupError.response?.status,
+            data: agentLookupError.response?.data
+          });
+          
+          updateResults.push({
+            success: false,
+            field: 'Primary Agent FUB Contact ID',
+            description: 'Primary Agent',
+            error: 'Airtable lookup failed',
+            details: `Lookup failed for ${primaryEmail}: ${agentLookupError.message}`
+          });
+        }
+      } else {
+        console.error(`❌ CRITICAL: Cannot lookup primary agent - no email available`);
+        console.log(`🔍 Diagnosis:`);
+        console.log(`  - Primary user ID: ${primaryUserId || 'None'}`);
+        console.log(`  - User data fetch: ${primaryUserData ? 'succeeded' : 'failed'}`);
+        console.log(`  - Email in user data: ${primaryUserData?.email || 'missing'}`);
+        
+        updateResults.push({
+          success: false,
+          field: 'Primary Agent FUB Contact ID',
+          description: 'Primary Agent',
+          error: 'No email available for agent lookup',
+          details: `Primary user ID: ${primaryUserId}, User fetch: ${primaryUserData ? 'succeeded but no email' : 'failed'}`
+        });
+      }
+
+      // CO-AGENT LOGIC
       if (coEmail) {
         try {
           const coRec = await this.findAirtableRecord('Agents', 'Company Email', coEmail);
@@ -331,6 +475,7 @@ class DealManagementAutomation {
           updateResults.push(false);
         }
       } else if (usersList.length === 1) {
+        // Single agent, set to 100%
         const existingPercent = existing?.fields['Primary Agent Deal %'];
         if (existingPercent == null) {
           updateResults.push(await this.updateFieldSafely(recordId, 'Primary Agent Deal %', 100, 'Primary Agent Percentage (Solo)'));
@@ -579,10 +724,26 @@ class DealManagementAutomation {
   }
 
   async getUserData(userId) {
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
+    
     const response = await axios.get(
       `${this.config.followUpBossApi}/users/${userId}`,
-      { headers: { Authorization: `Basic ${Buffer.from(this.config.followUpBossToken + ':').toString('base64')}` } }
+      { 
+        headers: { Authorization: `Basic ${Buffer.from(this.config.followUpBossToken + ':').toString('base64')}` },
+        timeout: 10000 // 10 second timeout
+      }
     );
+    
+    if (!response.data) {
+      throw new Error('No user data returned from API');
+    }
+    
+    if (!response.data.email) {
+      console.warn(`User ${userId} has no email address in FollowUpBoss`);
+    }
+    
     return response.data;
   }
 
@@ -614,6 +775,28 @@ class DealManagementAutomation {
         params: { filterByFormula: `{${fieldName}} = "${searchValue}"`, maxRecords: 1 }
       }
     );
+    
+    // If exact match fails and it's an email, try case-insensitive search
+    if (!resp.data.records[0] && fieldName.includes('Email')) {
+      console.log(`Retrying email search with case-insensitive match for: ${searchValue}`);
+      try {
+        const allRecords = await axios.get(`${this.config.airtableBaseUrl}/${tableId}`, {
+          headers: { Authorization: `Bearer ${this.config.airtableToken}` }
+        });
+        
+        const match = allRecords.data.records.find(record => 
+          record.fields[fieldName]?.toLowerCase() === searchValue.toLowerCase()
+        );
+        
+        if (match) {
+          console.log(`Found case-insensitive match: ${match.fields[fieldName]} (original: ${searchValue})`);
+          return match;
+        }
+      } catch (caseInsensitiveError) {
+        console.log(`Case-insensitive search also failed: ${caseInsensitiveError.message}`);
+      }
+    }
+    
     return resp.data.records[0] || null;
   }
 
