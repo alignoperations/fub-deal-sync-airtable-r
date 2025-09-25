@@ -393,6 +393,20 @@ class DealManagementAutomation {
                 const primRecByName = await this.findAirtableRecord('Agents', 'Name', primaryUserData.name);
                 if (primRecByName) {
                   console.log(`✅ Found agent by name with different email: ${primRecByName.fields['Company Email']}`);
+                  console.log(`🔄 Using name-based match for agent assignment`);
+                  
+                  // Use the name-based match for assignment
+                  const existingPrim = existing?.fields['Primary Agent FUB Contact ID'] || [];
+                  if (existingPrim[0] !== primRecByName.id) {
+                    console.log(`🔄 Updating primary agent from ${existingPrim[0] || 'None'} to ${primRecByName.id} (found by name)`);
+                    updateResults.push(await this.updateFieldSafely(recordId, 'Primary Agent FUB Contact ID', [primRecByName.id], 'Primary Agent (Name Match)'));
+                  } else {
+                    console.log(`✅ Primary agent already correctly set (name match)`);
+                    updateResults.push(true);
+                  }
+                  
+                  // Skip the error logging since we found and assigned the agent
+                  continue; // This will skip the error assignment below
                 } else {
                   console.log(`❌ Agent not found by name either`);
                 }
@@ -779,18 +793,41 @@ class DealManagementAutomation {
     // If exact match fails and it's an email, try case-insensitive search
     if (!resp.data.records[0] && fieldName.includes('Email')) {
       console.log(`Retrying email search with case-insensitive match for: ${searchValue}`);
+      console.log(`Searching in field: ${fieldName}`);
+      console.log(`Target value (lowercase): ${searchValue.toLowerCase()}`);
+      
       try {
         const allRecords = await axios.get(`${this.config.airtableBaseUrl}/${tableId}`, {
           headers: { Authorization: `Bearer ${this.config.airtableToken}` }
         });
         
-        const match = allRecords.data.records.find(record => 
-          record.fields[fieldName]?.toLowerCase() === searchValue.toLowerCase()
-        );
+        console.log(`Retrieved ${allRecords.data.records.length} records from Airtable`);
+        
+        // Debug: show first few email values
+        const emailSamples = allRecords.data.records.slice(0, 5).map(record => ({
+          name: record.fields.Name || 'No Name',
+          email: record.fields[fieldName] || 'No Email',
+          emailLower: record.fields[fieldName]?.toLowerCase() || 'null'
+        }));
+        console.log(`Sample email values:`, emailSamples);
+        
+        const match = allRecords.data.records.find(record => {
+          const recordEmail = record.fields[fieldName];
+          if (!recordEmail) return false;
+          
+          const recordEmailLower = recordEmail.toLowerCase().trim();
+          const searchValueLower = searchValue.toLowerCase().trim();
+          
+          console.log(`Comparing: "${recordEmailLower}" === "${searchValueLower}" (${recordEmailLower === searchValueLower})`);
+          
+          return recordEmailLower === searchValueLower;
+        });
         
         if (match) {
           console.log(`Found case-insensitive match: ${match.fields[fieldName]} (original: ${searchValue})`);
           return match;
+        } else {
+          console.log(`No case-insensitive match found after checking all records`);
         }
       } catch (caseInsensitiveError) {
         console.log(`Case-insensitive search also failed: ${caseInsensitiveError.message}`);
