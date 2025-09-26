@@ -19,14 +19,9 @@ class DealManagementAutomation {
     try {
       // Special handling for tags to debug the issue
       if (fieldName === 'FUB Contact Tags') {
-        console.log('🔍 DEBUG: Raw tags data:', JSON.stringify(fieldValue, null, 2));
-        console.log('🔍 DEBUG: Tags array length:', fieldValue.length);
-        console.log('🔍 DEBUG: Each tag:');
-        fieldValue.forEach((tag, index) => {
-          console.log(`  ${index + 1}. "${tag}" (length: ${tag.length}, type: ${typeof tag})`);
-        });
+        console.log(`🔍 DEBUG: Sending ${fieldValue.length} tags to Airtable: [${fieldValue.slice(0, 3).join(', ')}${fieldValue.length > 3 ? '...' : ''}]`);
         
-        // Check for problematic characters
+        // Check for problematic characters only
         const problematicTags = fieldValue.filter(tag => {
           return tag.includes('"') || tag.includes("'") || tag.includes('\n') || tag.includes('\r');
         });
@@ -34,22 +29,6 @@ class DealManagementAutomation {
         if (problematicTags.length > 0) {
           console.log('⚠️ Found tags with problematic characters:', problematicTags);
         }
-      }
-      
-      const updateData = { [fieldName]: fieldValue };
-      
-      // Log the exact payload being sent to Airtable
-      console.log(`🔍 DEBUG: Sending to Airtable:`, JSON.stringify(updateData, null, 2));
-      
-      // For tags, let's also inspect the raw HTTP payload
-      if (fieldName === 'FUB Contact Tags') {
-        console.log('🔍 DEBUG: Raw JSON string being sent:', JSON.stringify(updateData));
-        console.log('🔍 DEBUG: Field value type check:', typeof fieldValue, Array.isArray(fieldValue));
-        console.log('🔍 DEBUG: Each tag raw bytes:', fieldValue.map(tag => ({
-          tag: tag,
-          length: tag.length,
-          charCodes: [...tag].map(char => char.charCodeAt(0))
-        })));
       }
       
       await this.updateAirtableRecord('Transactions Log', recordId, updateData);
@@ -402,9 +381,11 @@ class DealManagementAutomation {
                     updateResults.push(await this.updateFieldSafely(recordId, 'Primary Agent FUB Contact ID', [primRecByName.id], 'Primary Agent (Name Match)'));
                   } else {
                     console.log(`✅ Primary agent already correctly set (name match)`);
-updateResults[updateResults.length - 1] = true;                  }
+                    updateResults.push(true);
+                  }
                   
                   // Skip the error logging since we found and assigned the agent
+                  continue; // This will skip the error assignment below
                 } else {
                   console.log(`❌ Agent not found by name either`);
                 }
@@ -795,37 +776,65 @@ updateResults[updateResults.length - 1] = true;                  }
       console.log(`Target value (lowercase): ${searchValue.toLowerCase()}`);
       
       try {
-        const allRecords = await axios.get(`${this.config.airtableBaseUrl}/${tableId}`, {
-          headers: { Authorization: `Bearer ${this.config.airtableToken}` }
-        });
+        // Fetch ALL records, handling pagination
+        let allRecords = [];
+        let offset = null;
         
-        console.log(`Retrieved ${allRecords.data.records.length} records from Airtable`);
+        do {
+          const params = {
+            headers: { Authorization: `Bearer ${this.config.airtableToken}` }
+          };
+          if (offset) {
+            params.params = { offset };
+          }
+          
+          const response = await axios.get(`${this.config.airtableBaseUrl}/${tableId}`, params);
+          allRecords = allRecords.concat(response.data.records);
+          offset = response.data.offset;
+        } while (offset);
+        
+        console.log(`Retrieved ${allRecords.length} total records from Airtable`);
         
         // Debug: show first few email values
-        const emailSamples = allRecords.data.records.slice(0, 5).map(record => ({
+        const emailSamples = allRecords.slice(0, 5).map(record => ({
           name: record.fields.Name || 'No Name',
           email: record.fields[fieldName] || 'No Email',
           emailLower: record.fields[fieldName]?.toLowerCase() || 'null'
         }));
         console.log(`Sample email values:`, emailSamples);
         
-        const match = allRecords.data.records.find(record => {
+        const match = allRecords.find(record => {
           const recordEmail = record.fields[fieldName];
           if (!recordEmail) return false;
           
           const recordEmailLower = recordEmail.toLowerCase().trim();
           const searchValueLower = searchValue.toLowerCase().trim();
           
-          console.log(`Comparing: "${recordEmailLower}" === "${searchValueLower}" (${recordEmailLower === searchValueLower})`);
+          const isMatch = recordEmailLower === searchValueLower;
+          if (isMatch) {
+            console.log(`FOUND MATCH: "${recordEmailLower}" === "${searchValueLower}"`);
+          }
           
-          return recordEmailLower === searchValueLower;
+          return isMatch;
         });
         
         if (match) {
           console.log(`Found case-insensitive match: ${match.fields[fieldName]} (original: ${searchValue})`);
           return match;
         } else {
-          console.log(`No case-insensitive match found after checking all records`);
+          console.log(`No case-insensitive match found after checking all ${allRecords.length} records`);
+          
+          // Debug: Show if any email contains "stanley"
+          const stanleyMatches = allRecords.filter(record => 
+            record.fields[fieldName]?.toLowerCase().includes('stanley')
+          );
+          if (stanleyMatches.length > 0) {
+            console.log(`Found ${stanleyMatches.length} records containing "stanley":`, 
+              stanleyMatches.map(r => ({ name: r.fields.Name, email: r.fields[fieldName] }))
+            );
+          } else {
+            console.log(`No records found containing "stanley" in email field`);
+          }
         }
       } catch (caseInsensitiveError) {
         console.log(`Case-insensitive search also failed: ${caseInsensitiveError.message}`);
