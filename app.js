@@ -31,6 +31,7 @@ class DealManagementAutomation {
         }
       }
       
+      const updateData = { [fieldName]: fieldValue };
       await this.updateAirtableRecord('Transactions Log', recordId, updateData);
       console.log(`✅ ${description} updated successfully`);
       return true;
@@ -365,7 +366,8 @@ class DealManagementAutomation {
           } else {
             console.error(`❌ PRIMARY AGENT NOT FOUND in Airtable for email: ${primaryEmail}`);
             
-            // Try alternative lookups
+            // Try alternative lookup by name
+            let agentFoundByName = false;
             if (primaryUserData?.name) {
               console.log(`🔍 Trying lookup by name: ${primaryUserData.name}`);
               try {
@@ -383,9 +385,7 @@ class DealManagementAutomation {
                     console.log(`✅ Primary agent already correctly set (name match)`);
                     updateResults.push(true);
                   }
-                  
-                  // Skip the error logging since we found and assigned the agent
-                  continue; // This will skip the error assignment below
+                  agentFoundByName = true;
                 } else {
                   console.log(`❌ Agent not found by name either`);
                 }
@@ -394,13 +394,16 @@ class DealManagementAutomation {
               }
             }
             
-            updateResults.push({
-              success: false,
-              field: 'Primary Agent FUB Contact ID',
-              description: 'Primary Agent',
-              error: 'Agent not found in Airtable',
-              details: `Email ${primaryEmail} not found in Agents table. User: ${primaryUserData?.name || 'Unknown'}`
-            });
+            // Only add error if both email and name lookups failed
+            if (!agentFoundByName) {
+              updateResults.push({
+                success: false,
+                field: 'Primary Agent FUB Contact ID',
+                description: 'Primary Agent',
+                error: 'Agent not found in Airtable',
+                details: `Email ${primaryEmail} not found in Agents table. User: ${primaryUserData?.name || 'Unknown'}`
+              });
+            }
           }
         } catch (agentLookupError) {
           console.error(`❌ Primary agent Airtable lookup failed:`, {
@@ -824,16 +827,17 @@ class DealManagementAutomation {
         } else {
           console.log(`No case-insensitive match found after checking all ${allRecords.length} records`);
           
-          // Debug: Show if any email contains "stanley"
-          const stanleyMatches = allRecords.filter(record => 
-            record.fields[fieldName]?.toLowerCase().includes('stanley')
+          // Debug: Show if any email contains the username part
+          const searchUsername = searchValue.toLowerCase().split('@')[0];
+          const partialMatches = allRecords.filter(record => 
+            record.fields[fieldName]?.toLowerCase().includes(searchUsername)
           );
-          if (stanleyMatches.length > 0) {
-            console.log(`Found ${stanleyMatches.length} records containing "stanley":`, 
-              stanleyMatches.map(r => ({ name: r.fields.Name, email: r.fields[fieldName] }))
+          if (partialMatches.length > 0) {
+            console.log(`Found ${partialMatches.length} records containing "${searchUsername}":`, 
+              partialMatches.map(r => ({ name: r.fields.Name, email: r.fields[fieldName] }))
             );
           } else {
-            console.log(`No records found containing "stanley" in email field`);
+            console.log(`No records found containing "${searchUsername}" in email field`);
           }
         }
       } catch (caseInsensitiveError) {
