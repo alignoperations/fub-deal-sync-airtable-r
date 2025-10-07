@@ -893,6 +893,7 @@ const config = {
   airtableAgentsTable: process.env.AIRTABLE_AGENTS_TABLE,
   airtableTransactionsTable: process.env.AIRTABLE_TRANSACTIONS_TABLE,
   airtableTransactionSourcesTable: process.env.AIRTABLE_TRANSACTION_SOURCES_TABLE,
+enableAsanaNoContactTasks: false, // Set to true to enable Asana task creation
   asana: {
     accessToken: process.env.ASANA_TOKEN,
     projectNoContact: '1209646560314018',
