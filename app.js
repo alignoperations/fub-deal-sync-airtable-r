@@ -152,7 +152,7 @@ class DealManagementAutomation {
       }
 
       // If no contact, create Asana no-contact task
-      if (!contactData.id) {
+      if (!contactData.id && this.config.enableAsanaNoContactTasks) {
         const agentInfo = { name: 'Unknown' };
         try {
           await this.createAsanaTask(dealData, agentInfo);
