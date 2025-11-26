@@ -152,6 +152,7 @@ class DealManagementAutomation {
       }
 
       // If no contact, create Asana no-contact task
+      // DISABLED: Set enableAsanaNoContactTasks to true in config to re-enable
       if (!contactData.id && this.config.enableAsanaNoContactTasks) {
         const agentInfo = { name: 'Unknown' };
         try {
@@ -169,6 +170,10 @@ class DealManagementAutomation {
       updateResults.push(await this.updateFieldSafely(recordId, 'Address / Client', dealData.name, 'Deal Name'));
       updateResults.push(await this.updateFieldSafely(recordId, 'Stage', dealData.stageName, 'Deal Stage'));
       updateResults.push(await this.updateFieldSafely(recordId, 'Transaction Type', dealData.pipelineName, 'Pipeline'));
+      
+      // Added to FUB checkbox - based on commissionValue
+      const addedToFUB = dealData.commissionValue != null && dealData.commissionValue !== '';
+      updateResults.push(await this.updateFieldSafely(recordId, 'Added to FUB', addedToFUB, 'Added to FUB'));
       
       if (dealData.description) {
         updateResults.push(await this.updateFieldSafely(recordId, 'Deal Description', dealData.description, 'Deal Description'));
@@ -893,7 +898,6 @@ const config = {
   airtableAgentsTable: process.env.AIRTABLE_AGENTS_TABLE,
   airtableTransactionsTable: process.env.AIRTABLE_TRANSACTIONS_TABLE,
   airtableTransactionSourcesTable: process.env.AIRTABLE_TRANSACTION_SOURCES_TABLE,
-enableAsanaNoContactTasks: false, // Set to true to enable Asana task creation
   asana: {
     accessToken: process.env.ASANA_TOKEN,
     projectNoContact: '1209646560314018',
