@@ -2,6 +2,15 @@ require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 
+// Suffix helpers for Airtable FUB Deal ID disambiguation
+const FUB_SUFFIX = process.env.FUB_ACCOUNT_SUFFIX || '';
+function toAirtableKey(dealId) {
+  return FUB_SUFFIX ? `${dealId}-${FUB_SUFFIX}` : `${dealId}`;
+}
+function toFubDealId(airtableKey) {
+  return parseInt(String(airtableKey).split('-')[0]);
+}
+
 class DealManagementAutomation {
   constructor(config) {
     this.config = config;
@@ -134,10 +143,10 @@ class DealManagementAutomation {
       }
 
       // Find or create Transactions Log record
-      const existing = await this.findAirtableRecord('Transactions Log', 'FUB Deal ID', dealData.id);
+      const existing = await this.findAirtableRecord('Transactions Log', 'FUB Deal ID', toAirtableKey(dealData.id));
       const recordId = existing
         ? existing.id
-        : (await this.createAirtableRecord('Transactions Log', { 'FUB Deal ID': dealData.id })).id;
+        : (await this.createAirtableRecord('Transactions Log', { 'FUB Deal ID': toAirtableKey(dealData.id) })).id;
       console.log(existing ? `Found record ${recordId}` : `Created record ${recordId}`);
 
       // Fetch primary contact details
@@ -224,7 +233,7 @@ class DealManagementAutomation {
       
       const ucDate = ['Landlord', 'Tenant'].includes(dealData.pipelineName)
         ? dealData.customApplicationAcceptedDate
-        : dealData.customContractRatifiedDate;
+        : (dealData.customUnderContractDate || dealData.customContractRatifiedDate);
       if (ucDate) {
         updateResults.push(await this.updateFieldSafely(recordId, 'Under Contract Date', ucDate, 'Under Contract Date'));
       }
