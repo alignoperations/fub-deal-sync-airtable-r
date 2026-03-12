@@ -719,10 +719,8 @@ class DealManagementAutomation {
   }
 
   async sendSlackErrorNotification(dealData, summary, contactId) {
-    const channel = this.config.slack.channelJulianna;
-    const contactLink = contactId ? `<https://align.followupboss.com/2/people/view/${contactId}|View Contact>` : 'No contact';
-    const text = `*Airtable Sync Error*\n• Deal: *${dealData.name}*\n• Summary: ${summary}\n• FUB Person: ${contactLink}`;
-    await axios.post('https://slack.com/api/chat.postMessage', { channel, text }, { headers: { Authorization: `Bearer ${this.config.slack.botToken}`, 'Content-Type':'application/json' } });
+    // Disabled: error notifications now go through centralized errorLogger -> Airtable -> daily review task
+    return;
   }
 
   async getDealData(dealId) {
