@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
+const { logError, classifyError } = require('./errorLogger');
 
 // Suffix helpers for Airtable FUB Deal ID disambiguation
 const FUB_SUFFIX = process.env.FUB_ACCOUNT_SUFFIX || '';
@@ -632,7 +633,13 @@ class DealManagementAutomation {
 
     } catch (err) {
       console.error('Processing error:', err.message);
-      logError({ appName: "fub-deal-sync-automation-r", errorType: classifyError(error), errorMessage: error.message, httpStatus: error.response?.status });
+      logError({
+        appName: 'fub-deal-sync-automation-r',
+        errorType: classifyError(err),
+        errorMessage: `Webhook processing error: ${err.message}`,
+        httpStatus: err.response?.status,
+        context: JSON.stringify(err.response?.data || {}).slice(0, 1000)
+      });
       return res.status(500).json({ status: 'error', message: err.message });
     }
   }
@@ -901,7 +908,6 @@ class DealManagementAutomation {
 }
 
 const config = {
-const { logError, classifyError } = require('./errorLogger');
   followUpBossApi: process.env.FUB_API_URL,
   followUpBossToken: process.env.FUB_TOKEN,
   airtableBaseUrl: process.env.AIRTABLE_BASE_URL,
