@@ -27,20 +27,6 @@ class DealManagementAutomation {
 
   async updateFieldSafely(recordId, fieldName, fieldValue, description) {
     try {
-      // Special handling for tags to debug the issue
-      if (fieldName === 'FUB Contact Tags') {
-        console.log(`🔍 DEBUG: Sending ${fieldValue.length} tags to Airtable: [${fieldValue.slice(0, 3).join(', ')}${fieldValue.length > 3 ? '...' : ''}]`);
-        
-        // Check for problematic characters only
-        const problematicTags = fieldValue.filter(tag => {
-          return tag.includes('"') || tag.includes("'") || tag.includes('\n') || tag.includes('\r');
-        });
-        
-        if (problematicTags.length > 0) {
-          console.log('⚠️ Found tags with problematic characters:', problematicTags);
-        }
-      }
-      
       const updateData = { [fieldName]: fieldValue };
       await this.updateAirtableRecord('Transactions Log', recordId, updateData);
       console.log(`✅ ${description} updated successfully`);
@@ -51,32 +37,17 @@ class DealManagementAutomation {
         status: error.response?.status,
         data: error.response?.data
       });
-      
-      // For tags specifically, let's try a different approach
-      if (fieldName === 'FUB Contact Tags' && error.response?.status === 422) {
-        console.log('🔄 Attempting tags update with cleaned data...');
-        
-        try {
-          // Clean the tags - remove any problematic characters and trim whitespace
-          const cleanedTags = fieldValue
-            .map(tag => tag.toString().trim())
-            .filter(tag => tag.length > 0 && tag.length < 100) // Remove empty or overly long tags
-            .map(tag => tag.replace(/[""'']/g, '')) // Remove quotes
-            .filter((tag, index, arr) => arr.indexOf(tag) === index); // Remove duplicates
-          
-          console.log('🧹 Cleaned tags:', cleanedTags);
-          
-          if (cleanedTags.length > 0) {
-            const cleanUpdateData = { [fieldName]: cleanedTags };
-            await this.updateAirtableRecord('Transactions Log', recordId, cleanUpdateData);
-            console.log(`✅ ${description} updated successfully with cleaned data`);
-            return true;
-          }
-        } catch (cleanupError) {
-          console.error('❌ Cleanup attempt also failed:', cleanupError.response?.data || cleanupError.message);
-        }
-      }
-      
+
+      logError({
+        appName: 'fub-deal-sync-automation-r',
+        errorType: 'FIELD_UPDATE',
+        errorMessage: `${description}: ${error.message}`,
+        httpStatus: error.response?.status,
+        fieldName: fieldName,
+        recordId: recordId,
+        context: JSON.stringify(error.response?.data || {}).slice(0, 1000)
+      });
+
       // Send individual field error notification
       try {
         const errorMsg = `Field update failed - ${description}: ${error.message}`;
@@ -87,48 +58,6 @@ class DealManagementAutomation {
       
       return false;
     }
-  }
-
-  async updateTagsInBatches(recordId, tags, description) {
-    console.log(`🔄 Attempting to update tags in smaller batches...`);
-    
-    // Split tags into smaller groups
-    const batchSize = 10;
-    const batches = [];
-    for (let i = 0; i < tags.length; i += batchSize) {
-      batches.push(tags.slice(i, i + batchSize));
-    }
-    
-    let successfulBatches = 0;
-    let allSuccessful = true;
-    
-    for (let i = 0; i < batches.length; i++) {
-      const batch = batches[i];
-      console.log(`📦 Updating batch ${i + 1}/${batches.length}: ${batch.join(', ')}`);
-      
-      const success = await this.updateFieldSafely(recordId, 'FUB Contact Tags', batch, `Tags Batch ${i + 1}`);
-      if (success) {
-        successfulBatches++;
-      } else {
-        allSuccessful = false;
-        
-        // If a batch fails, try individual tags
-        console.log(`🔄 Batch failed, trying individual tags...`);
-        for (const tag of batch) {
-          try {
-            const individualSuccess = await this.updateFieldSafely(recordId, 'FUB Contact Tags', [tag], `Individual Tag: ${tag}`);
-            if (individualSuccess) {
-              console.log(`✅ Individual tag "${tag}" succeeded`);
-            }
-          } catch (individualError) {
-            console.log(`❌ Individual tag "${tag}" failed: ${individualError.message}`);
-          }
-        }
-      }
-    }
-    
-    console.log(`📊 Batch update summary: ${successfulBatches}/${batches.length} batches successful`);
-    return allSuccessful;
   }
 
   async handleDealUpdate(req, res) {
@@ -552,20 +481,10 @@ class DealManagementAutomation {
         }
       }
 
-      // TAGS FIELD - Handle multiselect separately with enhanced debugging
+      // TAGS FIELD - Send all tags in a single call (typecast: true auto-creates missing options)
       if (contactData.tags && Array.isArray(contactData.tags) && contactData.tags.length > 0) {
-        console.log('🏷️ Starting tags processing...');
-        
-        // First attempt with normal update
-        const tagSuccess = await this.updateFieldSafely(recordId, 'FUB Contact Tags', contactData.tags, `Tags (${contactData.tags.join(', ')})`);
-        
-        if (!tagSuccess) {
-          // If normal update failed, try batch approach
-          console.log('🔄 Normal tags update failed, trying batch approach...');
-          await this.updateTagsInBatches(recordId, contactData.tags, 'Tags (Batch Mode)');
-        }
-        
-        updateResults.push(tagSuccess);
+        console.log(`🏷️ Updating ${contactData.tags.length} tags in single call`);
+        updateResults.push(await this.updateFieldSafely(recordId, 'FUB Contact Tags', contactData.tags, `Tags (${contactData.tags.length} tags)`));
       }
 
       // Summary of results - fix the filtering to include all results
@@ -880,7 +799,7 @@ class DealManagementAutomation {
     
     const resp = await axios.post(
       `${this.config.airtableBaseUrl}/${tableId}`,
-      { fields: recordData },
+      { fields: recordData, typecast: true },
       { headers: { Authorization: `Bearer ${this.config.airtableToken}`, 'Content-Type': 'application/json' } }
     );
     return resp.data;
@@ -898,7 +817,7 @@ class DealManagementAutomation {
     
     const resp = await axios.patch(
       `${this.config.airtableBaseUrl}/${tableId}/${recordId}`,
-      { fields: recordData },
+      { fields: recordData, typecast: true },
       { headers: { Authorization: `Bearer ${this.config.airtableToken}`, 'Content-Type': 'application/json' } }
     );
     return resp.data;
